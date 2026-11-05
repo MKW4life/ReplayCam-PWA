@@ -1,0 +1,15 @@
+{
+  "id":"./",
+  "name":"ReplayCam - リプレイバッファ",
+  "short_name":"ReplayCam",
+  "description":"オフラインで使えるカメラ録画・リプレイバッファ",
+  "start_url":"./",
+  "scope":"./",
+  "display":"standalone",
+  "background_color":"#0b0c10",
+  "theme_color":"#0c0d11",
+  "icons":[
+    {"src":"./icons/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"./icons/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}

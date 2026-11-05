@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0c0d11">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="ReplayCam">
+  <meta name="description" content="iPhone用のオフライン対応カメラ・リプレイバッファ">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icons/icon-180.png">
+  <link rel="icon" href="./icons/icon-192.png">
+  <link rel="stylesheet" href="./styles.css">
+  <title>ReplayCam</title>
+</head>
+<body>
+  <div class="shell">
+    <header class="app-header">
+      <div class="brand"><span class="brand-icon" aria-hidden="true"><span></span></span><div><strong>ReplayCam</strong><small>LOCAL CAMERA RECORDER</small></div></div>
+      <div class="connection" id="connection"><span class="dot"></span><span id="connection-label">準備中</span></div>
+    </header>
+
+    <main>
+      <div class="mode-tabs" role="group" aria-label="録画モード">
+        <button id="mode-replay" class="tab active" type="button" aria-pressed="true">リプレイバッファ</button>
+        <button id="mode-standard" class="tab" type="button" aria-pressed="false">通常録画</button>
+      </div>
+
+      <section class="camera-card" aria-label="カメラ映像">
+        <div class="viewfinder" id="viewfinder">
+          <video id="camera" autoplay playsinline muted aria-label="カメラのプレビュー"></video>
+          <div class="empty-camera" id="empty-camera"><div class="camera-glyph" aria-hidden="true"><span></span></div><b>カメラ待機中</b><small>「録画開始」を押すとカメラが起動します</small></div>
+          <div class="preview-top"><span class="record-indicator" id="record-indicator"><span class="red-dot"></span><span id="record-state">待機</span></span><span class="camera-facts" id="camera-facts">—</span></div>
+          <div class="preview-bottom"><span id="elapsed" class="elapsed">00:00</span><span id="buffer-counter">保存範囲 3:00</span></div>
+        </div>
+        <div class="actions">
+          <button type="button" id="start-button" class="button primary"><span class="circle-icon"></span><span>録画開始</span></button>
+          <button type="button" id="save-button" class="button secondary" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-4-4m4 4 4-4M5 16v4h14v-4"/></svg><span>直前を保存</span></button>
+          <button type="button" id="stop-button" class="button quiet" disabled>停止</button>
+        </div>
+      </section>
+
+      <section class="settings-panel" aria-labelledby="settings-heading">
+        <div class="section-title"><h2 id="settings-heading">録画設定</h2><span class="section-sub" id="settings-note">録画開始前に変更できます</span></div>
+        <div class="field-grid">
+          <label class="field" id="duration-field"><span>リプレイ時間</span><select id="duration"><option value="3">3分</option><option value="5">5分</option><option value="10">10分</option><option value="15">15分</option></select></label>
+          <label class="field"><span>解像度</span><select id="resolution"><option value="1080">1080p</option><option value="720">720p</option></select></label>
+          <label class="field"><span>フレームレート</span><select id="fps"><option value="60">60fps</option><option value="30">30fps</option></select></label>
+          <label class="field"><span>音声</span><select id="audio"><option value="on">ON</option><option value="off">OFF</option></select></label>
+        </div>
+        <div class="settings-footer"><button type="button" id="flip-button" class="text-button">カメラ切替</button><span id="storage-display">一時データ —</span></div>
+      </section>
+
+      <section class="library-panel" aria-labelledby="library-heading">
+        <div class="section-title"><h2 id="library-heading">保存済み</h2><button type="button" id="refresh-library" class="text-button">更新</button></div>
+        <div class="library-items" id="library-items"><div class="empty-library">保存した動画はここに表示されます。</div></div>
+      </section>
+
+      <p class="help-text" id="mode-explanation">録画中、短い動画を端末内に保存して古いものから自動削除します。リプレイは現段階では複数の動画をZIPにまとめて出力します。</p>
+      <p class="notice">録画中は画面を表示したままにしてください。画面ロック・アプリ切替で録画が止まることがあります。大切な動画は「ファイル」に書き出してください。</p>
+    </main>
+    <footer>REPLAYCAM <span id="version">v0.1.0</span> · 動画は外部サーバーに送信されません</footer>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <dialog id="clip-dialog" class="clip-dialog">
+    <div class="dialog-header"><div><div class="overline">SAVED VIDEO</div><h3 id="clip-title">録画</h3></div><button type="button" id="dialog-close" class="icon-button" aria-label="閉じる">✕</button></div>
+    <p id="clip-description" class="dialog-description"></p>
+    <div class="dialog-actions"><button id="export-all" class="button primary" type="button">書き出す</button><button id="delete-clip" class="button danger" type="button">削除</button></div>
+    <div id="segment-list" class="segment-list"></div>
+    <video id="clip-playback" controls playsinline preload="metadata" class="clip-playback" hidden></video>
+    <div class="progress" id="export-progress" hidden></div>
+  </dialog>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
