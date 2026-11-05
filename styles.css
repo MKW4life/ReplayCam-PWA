@@ -8,3 +8,6 @@
 @media(max-width:375px){.shell{padding-left:11px;padding-right:11px}.brand strong{font-size:18px}.actions{padding:9px;gap:7px}.button{font-size:11px;padding:9px 6px}.section-sub{font-size:9px}}
 @media(orientation:landscape) and (max-height:520px){.shell{max-width:1100px}.viewfinder{aspect-ratio:auto;height:55vh}.app-header{padding-bottom:9px}.mode-tabs{margin-bottom:8px}.settings-panel{margin-top:9px}}
 [hidden]{display:none!important}
+
+.camera-field{margin-top:15px;max-width:360px}.camera-status{font-size:12px;line-height:1.7;color:#d7dbe5}.storage-estimate{background:#242933;border:1px solid #394351;border-radius:10px;padding:13px;display:flex;flex-direction:column;gap:7px}.storage-estimate strong{font-size:13px}.storage-estimate small{font-size:11px;line-height:1.7;color:#abb5c5}.camera-facts{max-width:74%;text-align:right;line-height:1.5}.dialog-actions{flex-wrap:wrap}.dialog-actions .button{min-width:110px}#storage-display{line-height:1.7}
+.download-result{display:block;font-size:12px;line-height:1.8;color:#e4b0b5;margin-top:12px}.download-result[hidden]{display:none}

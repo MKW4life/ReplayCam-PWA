@@ -34,7 +34,7 @@ test('ZIP exports separate playable entries without recompression',async()=>{
   try{
     const filename=path.join(tmp,'test.zip');
     writeFileSync(filename,new Uint8Array(await zip.arrayBuffer()));
-    const listing=execFileSync('python',['-c',`import zipfile,json; z=zipfile.ZipFile(${JSON.stringify(filename)}); print(json.dumps([[k,z.read(k).decode()] for k in z.namelist()]))`],{encoding:'utf8'});
+    const listing=execFileSync('python',['-c','import zipfile,json,sys; z=zipfile.ZipFile(sys.argv[1]); print(json.dumps([[k,z.read(k).decode()] for k in z.namelist()]))',filename],{encoding:'utf8'});
     assert.deepEqual(JSON.parse(listing),[['clip_01.mp4','aaa'],['clip_02.mp4','bbbb']]);
   }finally{rmSync(tmp,{recursive:true,force:true});}
 });

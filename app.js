@@ -1,18 +1,19 @@
-import {SEGMENT_LENGTH_MS, safeSettings, formatDuration, formatBytes, chooseMimeType, extensionFor, selectReplayParts, fileStamp} from './lib.js';
+import {SEGMENT_LENGTH_MS, safeSettings, formatDuration, formatBytes, chooseMimeType, extensionFor, selectReplayParts, fileStamp, resolutionDimensions, targetVideoBitrate, estimateRecordingBytes, cameraLabel} from './lib.js';
 import {openDB, addPart, getPart, deletePart, putSaved, deleteSaved, listSaved, reclaimParts} from './storage.js';
 import {createZip} from './zip.js';
+import {mergeReplayLocally} from './merge-client.js';
 
 const el=id=>document.getElementById(id);
 const ui={
   video:el('camera'),empty:el('empty-camera'),start:el('start-button'),save:el('save-button'),stop:el('stop-button'),
   modeReplay:el('mode-replay'),modeStandard:el('mode-standard'),duration:el('duration'),resolution:el('resolution'),
-  fps:el('fps'),audio:el('audio'),flip:el('flip-button'),elapsed:el('elapsed'),counter:el('buffer-counter'),
+  fps:el('fps'),audio:el('audio'),facing:el('facing'),cameraStatus:el('camera-status'),estimate:el('capacity-estimate'),estimateDetail:el('capacity-detail'),elapsed:el('elapsed'),counter:el('buffer-counter'),
   indicator:el('record-indicator'),state:el('record-state'),facts:el('camera-facts'),settingsNote:el('settings-note'),
   durationField:el('duration-field'),modeExplanation:el('mode-explanation'),storage:el('storage-display'),
   library:el('library-items'),refresh:el('refresh-library'),connection:el('connection'),connectionLabel:el('connection-label'),
   toast:el('toast'),dialog:el('clip-dialog'),dialogClose:el('dialog-close'),clipTitle:el('clip-title'),
-  clipDescription:el('clip-description'),exportAll:el('export-all'),deleteClip:el('delete-clip'),
-  segments:el('segment-list'),playback:el('clip-playback'),exportProgress:el('export-progress')
+  clipDescription:el('clip-description'),exportAll:el('export-all'),deleteClip:el('delete-clip'),exportZip:el('export-zip'),
+  segments:el('segment-list'),playback:el('clip-playback'),exportProgress:el('export-progress'),downloadResult:el('download-result')
 };
 
 let settings=safeSettings(readSettings());
@@ -29,8 +30,12 @@ let startedAt=0;
 let liveParts=[];
 let selectedItem=null;
 let previewURL=null;
+let downloadURL=null;
 let toastTimeout=0;
 let libraryBusy=false;
+let exporting=false;
+let measuredBytes=0;
+let measuredSeconds=0;
 let wasHiddenDuringRecording=false;
 
 function readSettings(){try{return JSON.parse(localStorage.getItem('replaycam-settings')||'{}');}catch{return {};}}
@@ -55,8 +60,7 @@ function updateControls(){
   ui.modeStandard.setAttribute('aria-pressed',String(!isReplay));
   ui.modeReplay.disabled=busy;
   ui.modeStandard.disabled=busy;
-  for(const input of [ui.duration,ui.resolution,ui.fps,ui.audio])input.disabled=busy;
-  ui.flip.disabled=busy;
+  for(const input of [ui.duration,ui.resolution,ui.fps,ui.audio,ui.facing])input.disabled=busy;
   ui.durationField.hidden=!isReplay;
   ui.counter.textContent=isReplay?`保存範囲 ${settings.duration}:00`:'連続録画';
   ui.save.hidden=!isReplay;
@@ -69,20 +73,35 @@ function updateControls(){
   ui.indicator.classList.toggle('active',running);
   ui.settingsNote.textContent=busy?'録画中は変更できません':'録画開始前に変更できます';
   ui.modeExplanation.textContent=isReplay
-    ?'古い録画区間を破棄しながら、直前の指定時間を保持します。現段階ではリプレイを分割動画のZIPとして書き出します。区間の継ぎ目に短い欠落が生じる場合があります。'
+    ?'古い録画区間を破棄しながら、直前の指定時間を保持します。保存済みから1本の動画に結合してダウンロードできます。結合できない場合はZIPで保存します。区間の継ぎ目に短い欠落が生じる場合があります。'
     :'終了すると開始から終了までの動画を1ファイルとして保存します。長時間の録画では端末の空き容量に注意してください。';
   ui.resolution.value=String(settings.resolution);
   ui.fps.value=String(settings.fps);
   ui.duration.value=String(settings.duration);
   ui.audio.value=settings.audio?'on':'off';
+  ui.facing.value=settings.facing;
+  updateEstimate();
+  updateCameraStatus();
+}
+function updateEstimate(){
+  const observed=running&&measuredSeconds>0?{bytes:measuredBytes,seconds:measuredSeconds}:null;
+  const seconds=mode==='replay'?settings.duration*60:60;
+  const bytes=estimateRecordingBytes(settings,seconds,observed);
+  ui.estimate.textContent=mode==='replay'?`直前${settings.duration}分の予想容量：約${formatBytes(bytes)}`:`通常録画1分あたり：約${formatBytes(bytes)}`;
+  ui.estimateDetail.textContent=(observed?'録画中の実測から推定':'設定した画質・fpsから推定（目安）')+'。映像の内容や端末で変わります。';
+}
+function updateCameraStatus(){
+  const actual=stream?.getVideoTracks()[0]?.getSettings?.()||{};
+  ui.cameraStatus.textContent=stream?`使用中：${cameraLabel(actual.facingMode)} · 希望：${cameraLabel(settings.facing)}`:`選択中：${cameraLabel(settings.facing)}`;
 }
 function setCameraFacts(){
+  updateCameraStatus();
   const track=stream?.getVideoTracks()[0];
   const actual=track?.getSettings?.()||{};
   if (!stream){ui.facts.textContent='—';return;}
-  const d=(actual.width&&actual.height)?`${actual.width}×${actual.height}`:`${settings.resolution}p`;
+  const d=(actual.width&&actual.height)?`${actual.width}×${actual.height}`:'解像度未確認';
   const f=actual.frameRate?` · ${Math.round(actual.frameRate)}fps`:' · fps未確認';
-  ui.facts.textContent=d+f;
+  ui.facts.textContent=`${cameraLabel(actual.facingMode)} · ${d}${f}`;
 }
 function releaseCamera(){
   const old=stream;stream=null;
@@ -97,10 +116,11 @@ async function enableCamera(){
     throw new Error('カメラはHTTPS上でのみ利用できます。HTTPSで公開したURLをSafariで開いてください。');
   }
   if(typeof MediaRecorder==='undefined')throw new Error('このブラウザはMediaRecorderに対応していません。');
+  const dimensions=resolutionDimensions(settings.resolution);
   const video={
     facingMode:{ideal:settings.facing},
-    width:{ideal:settings.resolution===1080?1920:1280},
-    height:{ideal:settings.resolution===1080?1080:720},
+    width:{ideal:dimensions.width},
+    height:{ideal:dimensions.height},
     frameRate:{ideal:settings.fps,max:settings.fps}
   };
   const audio=settings.audio?{echoCancellation:false,noiseSuppression:false,autoGainControl:false}:false;
@@ -125,11 +145,13 @@ async function enableCamera(){
   try{await ui.video.play();}catch{/* autoplay is not always permitted */}
   setCameraFacts();
   const actual=videoTrack.getSettings?.()||{};
+  if(actual.width&&actual.height&&Math.min(actual.width,actual.height)<settings.resolution)toast(`希望の解像度に届かないため、実際は${actual.width}×${actual.height}で録画します。`,6500);
+  if(actual.facingMode&&actual.facingMode!==settings.facing)toast(`選択したカメラは使えず、${cameraLabel(actual.facingMode)}を使用します。`,6500);
   if(actual.frameRate && actual.frameRate < settings.fps-5)toast(`この端末の実際の録画フレームレートは約${Math.round(actual.frameRate)}fpsです。`,6000);
 }
 function makeRecorder(){
   const mime=chooseMimeType();
-  const targetBitrate=settings.resolution===1080?(settings.fps===60?8_000_000:6_000_000):(settings.fps===60?5_000_000:3_500_000);
+  const targetBitrate=targetVideoBitrate(settings);
   let instance;
   try{
     instance=new MediaRecorder(stream,{
@@ -182,6 +204,7 @@ async function runReplay(){
       const item=await recordSegment();
       if(item.blob.size>0){
         const id=await addPart({...item,bytes:item.blob.size});
+        measuredBytes+=item.blob.size;measuredSeconds+=(item.ended-item.started)/1000;
         liveParts.push({id,started:item.started,ended:item.ended,bytes:item.blob.size,mime:item.mime});
         const selected=selectReplayParts(liveParts,settings.duration*60*1000);
         const keep=new Set(selected.map(p=>p.id));
@@ -244,6 +267,7 @@ function runStandard(){
     writeQueue=writeQueue.then(async()=>{
       const id=await addPart({blob,started:Date.now(),ended:Date.now(),bytes:blob.size,mime});
       partIds.push(id);size+=blob.size;
+      measuredBytes=size;measuredSeconds=(Date.now()-startedAt)/1000;updateEstimate();
     }).catch(error=>{
       storeError=error;
       if(instance.state==='recording')instance.stop();
@@ -284,7 +308,7 @@ async function startRecording(){
     await openDB();
     await enableCamera();
     navigator.storage?.persist?.().catch(()=>{});
-    liveParts=[];
+    liveParts=[];measuredBytes=0;measuredSeconds=0;
     startedAt=Date.now();
     running=true;starting=false;
     updateControls();
@@ -313,7 +337,7 @@ function stopRecording(){
 async function updateStorage(){
   try{
     const est=await navigator.storage?.estimate?.();
-    if(est?.usage!==undefined){ui.storage.textContent=`保存領域 ${formatBytes(est.usage)} 使用`;return;}
+    if(est?.usage!==undefined){ui.storage.textContent=`このサイトの使用量 ${formatBytes(est.usage)}${est.quota?' / ブラウザ保存上限 '+formatBytes(est.quota):''}`;return;}
   }catch{/* Browsers may deny estimate. */}
   ui.storage.textContent='保存領域 —';
 }
@@ -375,12 +399,14 @@ function openClip(item){
   selectedItem=item;
   revokePreview();
   ui.clipTitle.textContent=item.kind==='replay'?'リプレイ録画':'通常録画';
-  ui.clipDescription.textContent=`${dateLabel(item.created)} · ${formatDuration(item.seconds)} · ${formatBytes(item.bytes)}${item.kind==='replay'?' · 分割動画':' · 1本の動画'}`;
-  ui.exportAll.textContent=item.kind==='standard'?'動画を書き出す':item.partIds.length===1?'動画を書き出す':'ZIPを書き出す';
+  ui.clipDescription.textContent=`${dateLabel(item.created)} · ${formatDuration(item.seconds)} · ${formatBytes(item.bytes)}${item.kind==='replay'?' · ダウンロード時に自動結合':' · 1本の動画'}`;
+  ui.exportAll.textContent=item.kind==='replay'&&item.partIds.length>1?'結合して動画をDL':'動画をダウンロード';
+  ui.exportZip.hidden=item.kind!=='replay';
   ui.exportProgress.hidden=true;
+  clearDownload();
   ui.segments.replaceChildren();
   if(item.kind==='replay'){
-    addText(ui.segments,'p','各区間は個別に再生・書き出しできます。ZIPは結合済みの動画ではありません。','dialog-description');
+    addText(ui.segments,'p','端末内で1本の動画に結合します（合計256MBまで）。未対応の形式・大容量の場合はZIPに切り替えます。元の区間の欠落は修復できません。','dialog-description');
     item.partIds.forEach((id,index)=>{
       const row=document.createElement('div');row.className='segment';
       const info=document.createElement('div');
@@ -399,22 +425,30 @@ function openClip(item){
   ui.dialog.showModal();
 }
 async function saveBlob(blob,filename){
-  const file=new File([blob],filename,{type:blob.type||'application/octet-stream'});
-  if(navigator.canShare?.({files:[file]})&&navigator.share){
-    try{await navigator.share({files:[file],title:'ReplayCam'});return;}
-    catch(error){if(error.name==='AbortError')return;/* use download fallback */}
-  }
-  const url=URL.createObjectURL(blob);
-  const anchor=document.createElement('a');anchor.href=url;anchor.download=filename;
-  document.body.appendChild(anchor);anchor.click();anchor.remove();
-  setTimeout(()=>URL.revokeObjectURL(url),120000);
+  clearDownload();
+  downloadURL=URL.createObjectURL(blob);
+  ui.downloadResult.href=downloadURL;ui.downloadResult.download=filename;
+  ui.downloadResult.hidden=false;
+  // Keep a real link available so Safari can also download on a fresh tap
+  // if the automatic click after asynchronous processing is blocked.
+  ui.downloadResult.click();
   toast('書き出しを開始しました。必要に応じて「ファイル」に保存してください。');
 }
-async function exportClip(){
-  if(!selectedItem||ui.exportAll.disabled)return;
+function clearDownload(){
+  if(downloadURL){
+    // A download may still be reading its blob after the dialog closes.
+    const old=downloadURL;setTimeout(()=>URL.revokeObjectURL(old),120000);
+    downloadURL=null;
+  }
+  ui.downloadResult.hidden=true;ui.downloadResult.removeAttribute('href');
+}
+async function exportClip(asZip=false){
+  if(!selectedItem||exporting)return;
+  exporting=true;
   const item=selectedItem;
-  ui.exportAll.disabled=true;
+  ui.exportAll.disabled=true;ui.exportZip.disabled=true;ui.deleteClip.disabled=true;ui.dialogClose.disabled=true;
   ui.exportProgress.hidden=false;
+  let fallbackReason='';
   try{
     const entries=[];
     for(let i=0;i<item.partIds.length;i++){
@@ -430,18 +464,29 @@ async function exportClip(){
       const full=new Blob(entries.map(x=>x.blob),{type});
       ui.exportProgress.textContent='動画を書き出しています…';
       await saveBlob(full,`${item.name}.${extensionFor(type)}`);
-    }else if(entries.length===1){
+    }else if(entries.length===1&&!asZip){
       await saveBlob(entries[0].blob,entries[0].name);
     }else{
-      ui.exportProgress.textContent='ZIP作成中…';
-      const zip=await createZip(entries,(n,total)=>{ui.exportProgress.textContent=`ZIP作成中 ${n}/${total}`;});
-      await saveBlob(zip,`${item.name}.zip`);
+      let merged=false;
+      if(!asZip){
+        try{
+          ui.exportProgress.textContent='動画を結合しています…';
+          const blob=await mergeReplayLocally(entries.map(entry=>entry.blob),(done,total)=>{ui.exportProgress.textContent=`動画を結合中 ${done}/${total}`;});
+          await saveBlob(blob,`${item.name}.${extensionFor(blob.type)}`);
+          merged=true;
+        }catch(error){fallbackReason=error.message||'動画を結合できませんでした。';}
+      }
+      if(!merged){
+        ui.exportProgress.textContent='ZIP作成中…';
+        const zip=await createZip(entries,(n,total)=>{ui.exportProgress.textContent=`ZIP作成中 ${n}/${total}`;});
+        await saveBlob(zip,`${item.name}.zip`);
+      }
     }
-    ui.exportProgress.textContent='書き出し処理が完了しました。';
+    ui.exportProgress.textContent=fallbackReason?`${fallbackReason} ZIPのダウンロードを開始しました。元動画は保存済みに残っています。`:'ダウンロードを開始しました。端末への保存完了を確認してください。';
   }catch(error){
     ui.exportProgress.textContent=`書き出しに失敗: ${error.message||error}`;
     toast(`書き出しに失敗しました: ${error.message||error}`,7500);
-  }finally{ui.exportAll.disabled=false;}
+  }finally{exporting=false;ui.exportAll.disabled=false;ui.exportZip.disabled=false;ui.deleteClip.disabled=false;ui.dialogClose.disabled=false;}
 }
 async function removeClip(){
   if(!selectedItem||!confirm('この録画を削除しますか？ 削除後は元に戻せません。'))return;
@@ -481,15 +526,13 @@ function bindEvents(){
   bind(ui.resolution,'resolution',Number);
   bind(ui.fps,'fps',Number);
   bind(ui.audio,'audio',value=>value==='on');
-  ui.flip.addEventListener('click',()=>{
-    if(running||starting||stopping)return;
-    settings.facing=settings.facing==='environment'?'user':'environment';
-    storeSettings();releaseCamera();toast(settings.facing==='user'?'前面カメラを選択しました':'背面カメラを選択しました');
-  });
+  bind(ui.facing,'facing');
   ui.refresh.addEventListener('click',refreshLibrary);
-  ui.dialogClose.addEventListener('click',()=>ui.dialog.close());
-  ui.dialog.addEventListener('close',()=>{revokePreview();selectedItem=null;});
-  ui.exportAll.addEventListener('click',exportClip);
+  ui.dialogClose.addEventListener('click',()=>{if(!exporting)ui.dialog.close();});
+  ui.dialog.addEventListener('cancel',event=>{if(exporting)event.preventDefault();});
+  ui.dialog.addEventListener('close',()=>{revokePreview();clearDownload();selectedItem=null;});
+  ui.exportAll.addEventListener('click',()=>exportClip());
+  ui.exportZip.addEventListener('click',()=>exportClip(true));
   ui.deleteClip.addEventListener('click',removeClip);
   window.addEventListener('online',updateConnection);
   window.addEventListener('offline',updateConnection);

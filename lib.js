@@ -5,7 +5,7 @@ export const SETTINGS_DEFAULTS = Object.freeze({duration:3,resolution:1080,fps:6
 export function safeSettings(raw = {}) {
   const valid = {...SETTINGS_DEFAULTS};
   if (REPLAY_OPTIONS.includes(Number(raw.duration))) valid.duration=Number(raw.duration);
-  if ([720,1080].includes(Number(raw.resolution))) valid.resolution=Number(raw.resolution);
+  if ([720,1080,1440,2160].includes(Number(raw.resolution))) valid.resolution=Number(raw.resolution);
   if ([30,60].includes(Number(raw.fps))) valid.fps=Number(raw.fps);
   if (typeof raw.audio === 'boolean') valid.audio=raw.audio;
   if (['user','environment'].includes(raw.facing)) valid.facing=raw.facing;
@@ -42,4 +42,22 @@ export function selectReplayParts(parts, durationMs) {
 export function fileStamp(date = new Date()) {
   const p=n=>String(n).padStart(2,'0');
   return `${date.getFullYear()}${p(date.getMonth()+1)}${p(date.getDate())}_${p(date.getHours())}${p(date.getMinutes())}${p(date.getSeconds())}`;
+}
+
+export function resolutionDimensions(resolution) {
+  const height=[720,1080,1440,2160].includes(resolution)?resolution:1080;
+  return {width:Math.round(height*16/9),height};
+}
+export function targetVideoBitrate(settings) {
+  const rates={720:[3_500_000,5_000_000],1080:[6_000_000,8_000_000],1440:[10_000_000,16_000_000],2160:[20_000_000,32_000_000]};
+  return (rates[settings.resolution]||rates[1080])[settings.fps===60?1:0];
+}
+export function estimateRecordingBytes(settings,seconds,observed) {
+  const rate=observed?.bytes>0&&observed?.seconds>0
+    ?observed.bytes/observed.seconds
+    :(targetVideoBitrate(settings)+(settings.audio?128_000:0))/8;
+  return Math.round(rate*Math.max(0,Number(seconds)||0));
+}
+export function cameraLabel(facing) {
+  return facing==='environment'?'外カメラ（背面）':facing==='user'?'内カメラ（前面）':'カメラ種別未確認';
 }

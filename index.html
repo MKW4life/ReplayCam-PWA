@@ -45,11 +45,14 @@
         <div class="section-title"><h2 id="settings-heading">録画設定</h2><span class="section-sub" id="settings-note">録画開始前に変更できます</span></div>
         <div class="field-grid">
           <label class="field" id="duration-field"><span>リプレイ時間</span><select id="duration"><option value="3">3分</option><option value="5">5分</option><option value="10">10分</option><option value="15">15分</option></select></label>
-          <label class="field"><span>解像度</span><select id="resolution"><option value="1080">1080p</option><option value="720">720p</option></select></label>
+          <label class="field"><span>希望する解像度</span><select id="resolution"><option value="2160">4K（2160p）</option><option value="1440">1440p（QHD）</option><option value="1080" selected>1080p（フルHD）</option><option value="720">720p（HD）</option></select></label>
           <label class="field"><span>フレームレート</span><select id="fps"><option value="60">60fps</option><option value="30">30fps</option></select></label>
           <label class="field"><span>音声</span><select id="audio"><option value="on">ON</option><option value="off">OFF</option></select></label>
         </div>
-        <div class="settings-footer"><button type="button" id="flip-button" class="text-button">カメラ切替</button><span id="storage-display">一時データ —</span></div>
+        <label class="field camera-field"><span>使用するカメラ</span><select id="facing"><option value="environment">外カメラ（背面）</option><option value="user">内カメラ（前面）</option></select></label>
+        <p class="camera-status" id="camera-status" role="status"></p>
+        <div class="storage-estimate"><strong id="capacity-estimate"></strong><small id="capacity-detail"></small><small>保存済み動画は別途容量を使用します。結合・書き出し中は追加のメモリや容量が必要です。</small></div>
+        <div class="settings-footer"><span id="storage-display">保存領域 —</span></div>
       </section>
 
       <section class="library-panel" aria-labelledby="library-heading">
@@ -60,7 +63,7 @@
       <p class="help-text" id="mode-explanation">録画中、短い動画を端末内に保存して古いものから自動削除します。リプレイは現段階では複数の動画をZIPにまとめて出力します。</p>
       <p class="notice">録画中は画面を表示したままにしてください。画面ロック・アプリ切替で録画が止まることがあります。大切な動画は「ファイル」に書き出してください。</p>
     </main>
-    <footer>REPLAYCAM <span id="version">v0.1.0</span> · 動画は外部サーバーに送信されません</footer>
+    <footer>REPLAYCAM <span id="version">v0.2.0 試用版</span> · 動画は外部サーバーに送信されません</footer>
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -68,10 +71,11 @@
   <dialog id="clip-dialog" class="clip-dialog">
     <div class="dialog-header"><div><div class="overline">SAVED VIDEO</div><h3 id="clip-title">録画</h3></div><button type="button" id="dialog-close" class="icon-button" aria-label="閉じる">✕</button></div>
     <p id="clip-description" class="dialog-description"></p>
-    <div class="dialog-actions"><button id="export-all" class="button primary" type="button">書き出す</button><button id="delete-clip" class="button danger" type="button">削除</button></div>
+    <div class="dialog-actions"><button id="export-all" class="button primary" type="button">動画をダウンロード</button><button id="export-zip" class="button secondary" type="button">ZIPで保存</button><button id="delete-clip" class="button danger" type="button">削除</button></div>
     <div id="segment-list" class="segment-list"></div>
     <video id="clip-playback" controls playsinline preload="metadata" class="clip-playback" hidden></video>
     <div class="progress" id="export-progress" hidden></div>
+    <a id="download-result" class="download-result" hidden>ダウンロードが始まらない場合はここをタップ</a>
   </dialog>
   <script type="module" src="./app.js"></script>
 </body>
