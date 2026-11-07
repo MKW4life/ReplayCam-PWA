@@ -52,6 +52,7 @@
         <label class="field camera-field"><span>使用するカメラ</span><select id="facing"><option value="environment">外カメラ（背面）</option><option value="user">内カメラ（前面）</option></select></label>
         <p class="camera-status" id="camera-status" role="status"></p>
         <p class="orientation-status" id="orientation-status" role="status"></p>
+        <p class="capture-fps" id="capture-fps" role="status"></p>
         <p class="orientation-help">横向きで撮るときは、端末の画面回転ロックを解除して横に持ち、「録画開始」を押してください。録画途中で向きを変えると、その時点までを保存して終了します。</p>
         <div class="storage-estimate"><strong id="capacity-estimate"></strong><small id="capacity-detail"></small><small>保存済み動画は別途容量を使用します。結合・書き出し中は追加のメモリや容量が必要です。</small></div>
         <div class="settings-footer"><span id="storage-display">保存領域 —</span></div>
@@ -65,7 +66,7 @@
       <p class="help-text" id="mode-explanation">録画中、短い動画を端末内に保存して古いものから自動削除します。リプレイは現段階では複数の動画をZIPにまとめて出力します。</p>
       <p class="notice">録画中は画面を表示したままにしてください。画面ロック・アプリ切替で録画が止まることがあります。大切な動画は「ファイル」に書き出してください。</p>
     </main>
-    <footer>REPLAYCAM <span id="version">v0.2.1 試用版</span> · 動画は外部サーバーに送信されません</footer>
+    <footer>REPLAYCAM <span id="version">v0.3.0 試用版</span> · 動画は外部サーバーに送信されません</footer>
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -77,6 +78,8 @@
     <div id="segment-list" class="segment-list"></div>
     <video id="clip-playback" controls playsinline preload="metadata" class="clip-playback" hidden></video>
     <div class="progress" id="export-progress" hidden></div>
+    <button id="share-video" class="button primary" type="button" hidden>写真に保存・共有</button>
+    <p id="share-help" class="dialog-description" hidden>共有画面に「ビデオを保存」が表示される場合は、それを選ぶと写真アプリに保存できます。表示されない場合は動画をダウンロードして「ファイル」に保存してください。</p>
     <a id="download-result" class="download-result" hidden>ダウンロードが始まらない場合はここをタップ</a>
   </dialog>
   <script type="module" src="./app.js"></script>

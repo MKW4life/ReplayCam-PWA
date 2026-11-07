@@ -37,13 +37,11 @@ for(const format of ['mp4','webm'])test(`joins ${format} segments with both audi
   }
   assert.ok(Math.abs(after.duration-2*before.duration)<0.08);
 });
-test('invalid, empty, oversized and incompatible input fail for ZIP fallback',async()=>{
+test('invalid, empty and incompatible input fail without silently dropping a segment',async()=>{
   await assert.rejects(mergeReplay([]),/録画/);
   await assert.rejects(mergeReplay([new Blob(['broken'])]),/動画|形式|format/i);
   await assert.rejects(mergeReplay([await fixture('av.mp4'),await fixture('av.webm')]),/形式|設定/);
   await assert.rejects(mergeReplay([await fixture('av.mp4'),await fixture('silent.mp4')]),/形式|設定/);
-  // Size is checked before any attempt to read/allocate the video.
-  await assert.rejects(mergeReplay([{size:300*1024*1024}]),/256/);
 });
 test('nonzero timestamps normalize and portrait rotation survives',async()=>{
   const offset=await fixture('offset.mp4');
@@ -59,4 +57,14 @@ test('nonzero timestamps normalize and portrait rotation survives',async()=>{
 test('silent recordings merge without inventing an audio track',async()=>{
   const silent=await fixture('silent.mp4');
   assert.equal((await inspect(await mergeReplay([silent,silent]))).tracks.length,1);
+});
+test('all distinct segments retain their full audio/video packet sequence in order',async()=>{
+  const blobs=[await fixture('av.mp4'),await fixture('av2.mp4'),await fixture('av.mp4')];
+  const sources=await Promise.all(blobs.map(inspect));
+  const merged=await inspect(await mergeReplay(blobs));
+  for(let track=0;track<2;track++){
+    const expected=sources.flatMap(source=>source.tracks[track].packets);
+    assert.equal(merged.tracks[track].packets.length,expected.length);
+    expected.forEach((packet,i)=>assert.deepEqual(merged.tracks[track].packets[i].data,packet.data));
+  }
 });

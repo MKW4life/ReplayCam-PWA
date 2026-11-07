@@ -25,7 +25,9 @@ export function formatBytes(bytes) {
 }
 export function chooseMimeType() {
   if (typeof MediaRecorder === 'undefined') return '';
-  for (const candidate of ['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4','video/webm;codecs=vp8,opus','video/webm']) {
+  // Pin the codec family across recorder restarts, while letting the browser
+  // choose its AVC profile/level for the requested resolution and frame rate.
+  for (const candidate of ['video/mp4;codecs=avc1,mp4a.40.2','video/mp4;codecs=avc1,opus','video/mp4;codecs=avc1','video/webm;codecs=vp8,opus','video/webm','video/mp4']) {
     if (MediaRecorder.isTypeSupported?.(candidate)) return candidate;
   }
   return '';

@@ -36,12 +36,14 @@ test('real browser recording exports a merged file with audio, explicit ZIP and 
   await page.locator('#stop-button').click();
   await expect(page.locator('#start-button')).toBeEnabled();
   await page.locator('.open-clip').first().click();
-  await expect(page.locator('#export-all')).toHaveText('結合して動画をDL');
+  await expect(page.locator('#export-all')).toHaveText('全区間を1本の動画にする');
   await page.evaluate(()=>navigator.serviceWorker.ready);
   await page.evaluate(()=>caches.open('unrelated-project-cache'));
   await context.setOffline(true);
   const downloadEvent=page.waitForEvent('download');
   await page.locator('#export-all').click();
+  await expect(page.locator('#download-result')).toBeVisible();
+  if(await page.locator('#share-video').isVisible())await page.locator('#download-result').click();
   const download=await downloadEvent;
   expect(download.suggestedFilename()).toMatch(/\.(mp4|webm)$/);
   const input=new Input({source:new BlobSource(new Blob([await readFile(await download.path())])),formats:[MP4,WEBM]});
@@ -57,7 +59,7 @@ test('real browser recording exports a merged file with audio, explicit ZIP and 
   expect((await zipEvent).suggestedFilename()).toMatch(/\.zip$/);
   await page.locator('#dialog-close').click();
   await page.reload();
-  await expect(page.locator('#version')).toContainText('v0.2.1');
+  await expect(page.locator('#version')).toContainText('v0.3.0');
   expect(await page.evaluate(()=>caches.has('unrelated-project-cache'))).toBe(true);
   expect(errors).toEqual([]);
 });
@@ -86,6 +88,8 @@ test('landscape recording downloads landscape video and keeps the controls visib
   await page.locator('.open-clip').click();
   const event=page.waitForEvent('download');
   await page.locator('#export-all').click();
+  await expect(page.locator('#download-result')).toBeVisible();
+  if(await page.locator('#share-video').isVisible())await page.locator('#download-result').click();
   const download=await event;
   const input=new Input({source:new BlobSource(new Blob([await readFile(await download.path())])),formats:[MP4,WEBM]});
   try{
@@ -128,12 +132,14 @@ test('turning the device during standard recording saves a playable video',async
   await page.locator('.open-clip').click();
   const event=page.waitForEvent('download');
   await page.locator('#export-all').click();
+  await expect(page.locator('#download-result')).toBeVisible();
+  if(await page.locator('#share-video').isVisible())await page.locator('#download-result').click();
   const input=new Input({source:new BlobSource(new Blob([await readFile(await (await event).path())])),formats:[MP4,WEBM]});
   try{expect(await input.computeDuration()).toBeGreaterThan(0.5);expect(await input.getPrimaryVideoTrack()).toBeTruthy();}
   finally{input.dispose();}
 });
 
-test('unreadable saved segments automatically download ZIP and remain saved',async({page})=>{
+test('unreadable saved segments show an error without automatically exporting ZIP',async({page})=>{
   await page.goto('/');
   await page.evaluate(async()=>{
     const {addPart,putSaved}=await import('./storage.js');
@@ -143,9 +149,94 @@ test('unreadable saved segments automatically download ZIP and remain saved',asy
   });
   await page.locator('#refresh-library').click();
   await page.locator('.open-clip').click();
-  const event=page.waitForEvent('download');
+  const downloads=[];page.on('download',item=>downloads.push(item));
   await page.locator('#export-all').click();
+  await expect(page.locator('#export-progress')).toContainText('1本の動画を出力できませんでした');
+  expect(downloads).toHaveLength(0);
+  const event=page.waitForEvent('download');
+  await page.locator('#export-zip').click();
   expect((await event).suggestedFilename()).toBe('Broken.zip');
   await page.locator('#dialog-close').click();
   await expect(page.locator('.clip-row')).toHaveCount(1);
+});
+
+
+test('all segments form one video and sharing uses a fresh tap with the full file',async({page})=>{
+  await page.addInitScript(()=>{
+    window.shareCalls=[];
+    Object.defineProperty(navigator,'canShare',{value:({files})=>files?.length===1&&files[0].type==='video/mp4'});
+    Object.defineProperty(navigator,'share',{value:async({files})=>{window.shareCalls.push({file:files[0],active:navigator.userActivation.isActive});}});
+  });
+  await page.goto('/');
+  await page.evaluate(async()=>{
+    const blob=await(await fetch('./tests/fixtures/av.mp4')).blob();
+    const {addPart,putSaved}=await import('./storage.js');
+    const partIds=[];for(let i=0;i<3;i++)partIds.push(await addPart({blob,mime:'video/mp4',bytes:blob.size}));
+    await putSaved({id:'three',name:'ThreeParts',kind:'replay',created:Date.now(),partIds,seconds:1.8,bytes:blob.size*3,mime:'video/mp4'});
+  });
+  await page.locator('#refresh-library').click();
+  await page.locator('.open-clip').click();
+  await page.locator('#export-all').click();
+  await expect(page.locator('#share-video')).toBeVisible();
+  expect(await page.evaluate(()=>shareCalls.length)).toBe(0);
+  await page.locator('#share-video').click();
+  const result=await page.evaluate(async()=>{
+    const {Input,MP4,BlobSource,EncodedPacketSink}=await import('./vendor/mediabunny.js');
+    const {file,active}=shareCalls[0];
+    const input=new Input({formats:[MP4],source:new BlobSource(file)});
+    try{
+      const video=await input.getPrimaryVideoTrack();let frames=0;
+      for await(const packet of new EncodedPacketSink(video).packets())frames++;
+      return {name:file.name,type:file.type,active,frames,duration:await input.computeDuration(),audio:!!await input.getPrimaryAudioTrack()};
+    }finally{input.dispose();}
+  });
+  expect(result.name).toBe('ThreeParts.mp4');expect(result.type).toBe('video/mp4');expect(result.active).toBe(true);
+  expect(result.frames).toBe(18);expect(result.duration).toBeGreaterThan(1.7);expect(result.audio).toBe(true);
+});
+
+test('private-file streaming merges inputs over the previous 256MB limit',async({page})=>{
+  await page.goto('/');
+  const result=await page.evaluate(async()=>{
+    const original=await(await fetch('./tests/fixtures/av.mp4')).blob();
+    const padding=new Blob([new Uint8Array(1024*1024)]);
+    const large=new Blob([original,...Array(257).fill(padding)],{type:'video/mp4'});
+    const {mergeReplayLocally}=await import('./merge-client.js');
+    const {EXPORT_DIRECTORY}=await import('./merge-destination.js');
+    const result=await mergeReplayLocally([large,original]);
+    const {Input,MP4,BlobSource,EncodedPacketSink}=await import('./vendor/mediabunny.js');
+    const input=new Input({formats:[MP4],source:new BlobSource(result.blob)});
+    let frames=0,duration;
+    try{for await(const packet of new EncodedPacketSink(await input.getPrimaryVideoTrack()).packets())frames++;duration=await input.computeDuration();}
+    finally{input.dispose();}
+    const directory=await(await navigator.storage.getDirectory()).getDirectoryHandle(EXPORT_DIRECTORY);
+    const before=[];for await(const name of directory.keys())before.push(name);
+    await result.release();
+    const after=[];for await(const name of directory.keys())after.push(name);
+    return {inputSize:large.size,frames,duration,tempFilesBefore:before.length,tempFilesAfter:after.length};
+  });
+  expect(result.inputSize).toBeGreaterThan(256*1024*1024);
+  expect(result.frames).toBe(12);expect(result.duration).toBeGreaterThan(1.1);
+  expect(result.tempFilesBefore).toBe(1);expect(result.tempFilesAfter).toBe(0);
+});
+
+test('60fps is requested first and lower camera fps is labeled accurately',async({page})=>{
+  await page.addInitScript(()=>{
+    const original=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    window.cameraRequests=[];
+    navigator.mediaDevices.getUserMedia=async constraints=>{
+      cameraRequests.push(constraints.video.frameRate);
+      if(constraints.video.frameRate.exact===60)throw new DOMException('60fps unavailable','OverconstrainedError');
+      return original(constraints);
+    };
+  });
+  await page.goto('/');
+  await page.locator('#resolution').selectOption('720');
+  await page.locator('#start-button').click();
+  await expect(page.locator('#stop-button')).toBeEnabled();
+  const requests=await page.evaluate(()=>cameraRequests);
+  expect(requests[0]).toEqual({exact:60});expect(requests[1]).toEqual({ideal:60,max:60});
+  await expect(page.locator('#capture-fps')).toContainText('希望 60fps / カメラ設定');
+  await expect(page.locator('#capture-fps')).toContainText('保存動画の実際のfps');
+  await page.locator('#stop-button').click();
+  await expect(page.locator('#start-button')).toBeEnabled();
 });

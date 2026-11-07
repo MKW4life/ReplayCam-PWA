@@ -1,6 +1,6 @@
-import {Input,MP4,WEBM,BlobSource,Output,BufferTarget,Mp4OutputFormat,WebMOutputFormat,EncodedPacketSink,EncodedVideoPacketSource,EncodedAudioPacketSource} from './vendor/mediabunny.js';
+import {Input,MP4,WEBM,BlobSource,Output,StreamTarget,Mp4OutputFormat,WebMOutputFormat,EncodedPacketSink,EncodedVideoPacketSource,EncodedAudioPacketSource} from './vendor/mediabunny.js';
+import {createBlobDestination} from './merge-destination.js';
 
-export const MAX_MERGE_BYTES=256*1024*1024;
 function configKey(config){
   if(!config)return null;
   const {description,...rest}=config;
@@ -9,9 +9,8 @@ function configKey(config){
 
 // Remux encoded packets, retaining both tracks and their relative timing.
 // No decoder, encoder, network request or video upload is involved.
-export async function mergeReplay(blobs,onProgress=()=>{}){
+export async function mergeReplay(blobs,onProgress=()=>{},destination=createBlobDestination()){
   if(!blobs.length)throw Error('録画区間がありません');
-  if(blobs.reduce((sum,b)=>sum+b.size,0)>MAX_MERGE_BYTES)throw Error('端末のメモリを保護するため、自動結合は256MBまでです。ZIPで保存してください。');
   let output,videoSource,audioSource,baseline,offset=0,mime;
   try{
     for(let i=0;i<blobs.length;i++){
@@ -29,7 +28,7 @@ export async function mergeReplay(blobs,onProgress=()=>{}){
           baseline=signature;
           const mp4=['avc','hevc','av1'].includes(videoCodec);
           mime=mp4?'video/mp4':'video/webm';
-          output=new Output({format:mp4?new Mp4OutputFormat({fastStart:'in-memory'}):new WebMOutputFormat(),target:new BufferTarget()});
+          output=new Output({format:mp4?new Mp4OutputFormat({fastStart:false}):new WebMOutputFormat(),target:new StreamTarget(new WritableStream({write:chunk=>destination.write(chunk)}),{chunked:true,chunkSize:1024*1024})});
           videoSource=new EncodedVideoPacketSource(videoCodec);
           output.addVideoTrack(videoSource,{rotation});
           if(audio){audioSource=new EncodedAudioPacketSource(audioCodec);output.addAudioTrack(audioSource);}
@@ -65,9 +64,10 @@ export async function mergeReplay(blobs,onProgress=()=>{}){
     }
     videoSource.close();audioSource?.close();
     await output.finalize();
-    return new Blob([output.target.buffer],{type:mime});
+    return await destination.finish(mime);
   }catch(error){
     await output?.cancel().catch(()=>{});
+    await destination.abort();
     throw error;
   }
 }

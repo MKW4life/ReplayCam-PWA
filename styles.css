@@ -23,3 +23,5 @@
   .empty-camera{gap:4px}.camera-glyph{width:36px;height:30px;margin-bottom:3px}.empty-camera small{font-size:10px}
   .settings-panel{margin-top:10px}.preview-top{top:8px;left:8px;right:8px}.preview-bottom{bottom:8px;left:8px;right:8px}
 }
+
+.capture-fps{font-size:11px;color:var(--muted);line-height:1.8}#share-video{margin-top:12px;width:100%}
