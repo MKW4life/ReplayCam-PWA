@@ -59,7 +59,7 @@ test('real browser recording exports a merged file with audio, explicit ZIP and 
   expect((await zipEvent).suggestedFilename()).toMatch(/\.zip$/);
   await page.locator('#dialog-close').click();
   await page.reload();
-  await expect(page.locator('#version')).toContainText('v0.3.2');
+  await expect(page.locator('#version')).toContainText('v0.4.0');
   expect(await page.evaluate(()=>caches.has('unrelated-project-cache'))).toBe(true);
   expect(errors).toEqual([]);
 });
@@ -249,17 +249,19 @@ test('60fps is requested first and lower camera fps is labeled accurately',async
   await expect(page.locator('#start-button')).toBeEnabled();
 });
 
-test('replay restarts capture before a slow segment write completes',async({page})=>{
+test('continuous replay never restarts at 15 seconds or on Save despite slow storage',async({page})=>{
   await page.addInitScript(()=>{
     window.captureEvents=[];
-    const start=MediaRecorder.prototype.start;
-    MediaRecorder.prototype.start=function(...args){captureEvents.push('capture');return start.apply(this,args);};
+    for(const method of ['start','stop']){
+      const original=MediaRecorder.prototype[method];
+      MediaRecorder.prototype[method]=function(...args){captureEvents.push(method);return original.apply(this,args);};
+    }
     const complete=Object.getOwnPropertyDescriptor(IDBTransaction.prototype,'oncomplete');
     Object.defineProperty(IDBTransaction.prototype,'oncomplete',{
       configurable:true,get:complete.get,
       set(handler){
         if(typeof handler!=='function'||this.mode!=='readwrite'||!this.objectStoreNames.contains('parts')){complete.set.call(this,handler);return;}
-        complete.set.call(this,event=>setTimeout(()=>{captureEvents.push('stored');handler.call(this,event);},700));
+        complete.set.call(this,event=>setTimeout(()=>handler.call(this,event),700));
       }
     });
   });
@@ -268,22 +270,31 @@ test('replay restarts capture before a slow segment write completes',async({page
   await page.locator('#fps').selectOption('30');
   await page.locator('#start-button').click();
   await expect(page.locator('#save-button')).toBeEnabled();
+  await page.waitForTimeout(16200);
+  expect(await page.evaluate(()=>captureEvents)).toEqual(['start']);
+  await page.locator('#save-button').click();
+  await expect(page.locator('.clip-row')).toHaveCount(1,{timeout:15000});
+  expect(await page.evaluate(()=>captureEvents)).toEqual(['start']);
+  await expect(page.locator('#save-button')).toBeEnabled();
   await page.waitForTimeout(1200);
   await page.locator('#save-button').click();
-  await expect.poll(()=>page.evaluate(()=>captureEvents.filter(item=>item==='capture').length)).toBe(2);
-  await page.waitForTimeout(150);
-  // Rotate while the old segment is still being persisted. The final saved
-  // snapshot must also include the newly active segment, not only the old one.
-  await page.setViewportSize({width:844,height:390});
-  await expect(page.locator('.clip-row')).toHaveCount(1);
-  const events=await page.evaluate(()=>captureEvents);
-  expect(events.slice(0,3)).toEqual(['capture','capture','stored']);
-  await expect(page.locator('#start-button')).toBeEnabled();
-  const snapshot=await page.evaluate(async()=>{
-    const {listSaved,getPart}=await import('./storage.js');
-    const [saved]=await listSaved();
-    const parts=await Promise.all(saved.partIds.map(getPart));
-    return {count:parts.length,bytes:parts.reduce((sum,part)=>sum+part.blob.size,0)};
-  });
-  expect(snapshot.count).toBe(2);expect(snapshot.bytes).toBeGreaterThan(1000);
+  await expect(page.locator('.clip-row')).toHaveCount(2,{timeout:15000});
+  expect(await page.evaluate(()=>captureEvents)).toEqual(['start']);
+  await page.locator('#stop-button').click();
+  await expect(page.locator('#start-button')).toBeEnabled({timeout:15000});
+  expect(await page.evaluate(()=>captureEvents)).toEqual(['start','stop']);
+  await page.locator('.open-clip').first().click();
+  const event=page.waitForEvent('download');
+  await page.locator('#export-all').click();
+  await expect(page.locator('#download-result')).toBeVisible();
+  if(await page.locator('#share-video').isVisible())await page.locator('#download-result').click();
+  const input=new Input({source:new BlobSource(new Blob([await readFile(await (await event).path())])),formats:[MP4,WEBM]});
+  try{
+    const times=[];for await(const packet of new EncodedPacketSink(await input.getPrimaryVideoTrack()).packets())times.push(packet.timestamp);
+    times.sort((a,b)=>a-b);
+    expect(times.length).toBeGreaterThan(200);
+    expect(Math.max(...times.slice(1).map((time,i)=>time-times[i]))).toBeLessThan(0.5);
+    expect(await input.getPrimaryAudioTrack()).toBeTruthy();
+    expect(await input.computeDuration()).toBeGreaterThan(16);
+  }finally{input.dispose();}
 });

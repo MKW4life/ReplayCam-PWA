@@ -9,7 +9,7 @@ async function releaseExport(key){
 // A reload discards the prepared link, but not the private temporary file.
 // Recover this tab's old files without touching exports open in another tab.
 for(const key of pendingExports())setTimeout(()=>void releaseExport(key),120000);
-export function mergeReplayLocally(blobs,onProgress=()=>{}){
+export function mergeReplayLocally(blobs,onProgress=()=>{},options={}){
   return new Promise((resolve,reject)=>{
     if(typeof Worker==='undefined'){reject(Error('このブラウザでは動画結合を利用できません。ZIPで保存してください。'));return;}
     const worker=new Worker(new URL('./merge-worker.js',import.meta.url),{type:'module'});
@@ -30,6 +30,6 @@ export function mergeReplayLocally(blobs,onProgress=()=>{}){
     };
     worker.onerror=event=>{event.preventDefault();finish(Error('この端末で動画を結合できませんでした。ZIPで保存してください。'));};
     worker.onmessageerror=()=>finish(Error('結合結果を読み込めませんでした。ZIPで保存してください。'));
-    try{worker.postMessage({blobs});}catch(error){finish(error);}
+    try{worker.postMessage({blobs,options});}catch(error){finish(error);}
   });
 }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {Input,MP4,WEBM,BlobSource,EncodedPacketSink} from '../vendor/mediabunny.js';
 import {mergeReplay} from '../merge.js';
+import {Mp4FragmentCollector} from '../mp4-fragments.js';
 
 const fixture=async name=>new Blob([await readFile(new URL(`./fixtures/${name}`,import.meta.url))]);
 async function inspect(blob){
@@ -67,4 +68,16 @@ test('all distinct segments retain their full audio/video packet sequence in ord
     assert.equal(merged.tracks[track].packets.length,expected.length);
     expected.forEach((packet,i)=>assert.deepEqual(merged.tracks[track].packets[i].data,packet.data));
   }
+});
+test('continuous rolling replay keeps native frame spacing when fragments are joined and trimmed',async()=>{
+  const original=await fixture('continuous.mp4'),collector=new Mp4FragmentCollector();
+  const fragments=await collector.push(original);await collector.finish();
+  const result=await mergeReplay(fragments.slice(2),()=>{},undefined,{continuous:true,startTime:3.2,endTime:5});
+  const before=await inspect(original),after=await inspect(result);
+  const video=after.tracks[0].packets;
+  assert.equal(video.length,20);
+  for(let i=1;i<video.length;i++)assert.ok(Math.abs(video[i].timestamp-video[i-1].timestamp-0.1)<0.0001);
+  video.forEach((packet,i)=>assert.deepEqual(packet.data,before.tracks[0].packets[i+30].data));
+  assert.equal(after.tracks.length,2);
+  assert.ok(after.duration>=2&&after.duration<2.1);
 });

@@ -41,6 +41,15 @@ export function selectReplayParts(parts, durationMs) {
   const selected=parts.filter(part => part.ended > lastEnd-durationMs);
   return selected.length?selected:[parts.at(-1)];
 }
+export function selectContinuousParts(parts,endTime,durationSeconds){
+  const relevant=parts.filter(part=>part.mediaStart<endTime);
+  if(!relevant.length)return [];
+  let first=relevant.findIndex(part=>part.mediaEnd>endTime-durationSeconds);
+  if(first<0)return [];
+  // Keep the fragment containing the preceding decoding keyframe too.
+  while(first>0&&!relevant[first].hasKey&&relevant[first-1].mediaEnd>endTime-durationSeconds-15)first--;
+  return relevant.slice(first);
+}
 export function fileStamp(date = new Date()) {
   const p=n=>String(n).padStart(2,'0');
   return `${date.getFullYear()}${p(date.getMonth()+1)}${p(date.getDate())}_${p(date.getHours())}${p(date.getMinutes())}${p(date.getSeconds())}`;

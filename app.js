@@ -1,4 +1,4 @@
-import {SEGMENT_LENGTH_MS, safeSettings, formatDuration, formatBytes, chooseMimeType, extensionFor, selectReplayParts, fileStamp, resolutionDimensions, targetVideoBitrate, estimateRecordingBytes, cameraLabel, captureOrientation, orientationLabel, containedFrame} from './lib.js';
+import {SEGMENT_LENGTH_MS, safeSettings, formatDuration, formatBytes, chooseMimeType, extensionFor, selectReplayParts, selectContinuousParts, fileStamp, resolutionDimensions, targetVideoBitrate, estimateRecordingBytes, cameraLabel, captureOrientation, orientationLabel, containedFrame} from './lib.js';
 import {openDB, addPart, getPart, deletePart, putSaved, deleteSaved, listSaved, reclaimParts} from './storage.js';
 import {createZip} from './zip.js';
 import {requestCamera} from './camera.js';
@@ -31,6 +31,9 @@ let pendingReplaySave=false;
 let captureSequence=0;
 let activeSegmentSequence=0;
 let pendingSaveSequence=0;
+let continuousReplay=false;
+let pendingMediaTime=0;
+let recordingStats=null;
 let currentMediaType='';
 let lockedMediaType='';
 let startedAt=0;
@@ -77,16 +80,17 @@ function updateControls(){
   ui.durationField.hidden=!isReplay;
   ui.counter.textContent=isReplay?`保存範囲 ${settings.duration}:00`:'連続録画';
   ui.save.hidden=!isReplay;
+  ui.save.querySelector('span:last-child').textContent=savingReplay?'保存処理中…':'直前を保存';
   ui.start.disabled=busy;
   ui.stop.disabled=!running||stopping;
   ui.save.disabled=!running||stopping||savingReplay||!isReplay;
   ui.stop.textContent=isReplay?'停止':'終了して保存';
   ui.start.querySelector('span:last-child').textContent=starting?'カメラ起動中…':'録画開始';
-  ui.state.textContent=starting?'接続中':stopping?'終了処理中':running?(isReplay?'BUFFER':'REC'):'待機';
+  ui.state.textContent=starting?'接続中':stopping?'終了処理中':running?(isReplay?(continuousReplay?'連続BUFFER':'BUFFER'):'REC'):'待機';
   ui.indicator.classList.toggle('active',running);
   ui.settingsNote.textContent=busy?'録画中は変更できません':'録画開始前に変更できます';
   ui.modeExplanation.textContent=isReplay
-    ?'古い録画区間を破棄しながら、直前の指定時間を保持します。保存済みから1本の動画に結合してダウンロードできます。結合できない場合は理由を表示し、元の区間を残します。区間の継ぎ目に短い欠落が生じる場合があります。'
+    ?'録画を継続したまま端末内の古い区間を破棄し、直前の指定時間を保持します（MP4対応ブラウザー）。保存済みから1本の動画にして保存できます。結合できない場合は理由を表示し、元の区間を残します。'
     :'終了すると開始から終了までの動画を1ファイルとして保存します。長時間の録画では端末の空き容量に注意してください。';
   ui.resolution.value=String(settings.resolution);
   ui.fps.value=String(settings.fps);
@@ -114,6 +118,7 @@ function updateFpsStatus(){
   ui.fpsStatus.textContent=stream
     ?`希望 ${settings.fps}fps / カメラ設定 ${actual.frameRate?'約'+Math.round(actual.frameRate)+'fps':'未確認'}。保存動画の実際のfpsは端末や録画処理にも依存します。`
     :`希望 ${settings.fps}fps。カメラの対応状況は録画開始時に確認します。`;
+  if(recordingStats?.frames)ui.fpsStatus.textContent+=` ${running?'録画データ':'直前の録画データ'}：平均${recordingStats.fps.toFixed(1)}fps / 最大フレーム間隔${recordingStats.maxGap.toFixed(2)}秒。`;
 }
 function actualOrientation(){
   const actual=stream?.getVideoTracks()[0]?.getSettings?.()||{};
@@ -161,7 +166,7 @@ function setCameraFacts(){
   const width=ui.video.videoWidth||actual.width,height=ui.video.videoHeight||actual.height;
   const d=(width&&height)?`${width}×${height}`:'解像度未確認';
   const f=actual.frameRate?` · カメラ約${Math.round(actual.frameRate)}fps`:' · fps未確認';
-  ui.facts.textContent=`${cameraLabel(actual.facingMode)} · ${d}${f}`;
+  ui.facts.textContent=`${cameraLabel(actual.facingMode)} · ${d}${f}${recordingStats?.frames?' · 保存平均'+recordingStats.fps.toFixed(1)+'fps':''}`;
 }
 function releaseCamera(){
   const old=stream;stream=null;
@@ -217,10 +222,12 @@ function makeRecorder(){
     instance=new MediaRecorder(stream,{
       ...(mime?{mimeType:mime}:{}),
       videoBitsPerSecond:targetBitrate,
-      audioBitsPerSecond:128_000
+      audioBitsPerSecond:128_000,
+      ...(mode==='replay'?{videoKeyFrameIntervalDuration:1000}:{})
     });
   }catch{
-    instance=new MediaRecorder(stream,mime?{mimeType:mime}:{});
+    try{instance=new MediaRecorder(stream,{...(mime?{mimeType:mime}:{}),videoBitsPerSecond:targetBitrate,audioBitsPerSecond:128_000});}
+    catch{instance=new MediaRecorder(stream,mime?{mimeType:mime}:{});}
   }
   currentMediaType=instance.mimeType||mime||'video/mp4';
   return instance;
@@ -261,7 +268,71 @@ async function deleteExpiredParts(expired){
   const protectedIds=new Set(saved.flatMap(item=>item.partIds));
   for(const part of expired)if(!protectedIds.has(part.id))await deletePart(part.id);
 }
-async function runReplay(){
+async function saveContinuousSnapshot(target){
+  const parts=selectContinuousParts(liveParts,target,settings.duration*60);
+  if(!parts.length)throw Error('まだ保存可能な映像がありません。数秒後にもう一度お試しください。');
+  if(!parts.some(part=>part.hasKey&&part.keyTime<target))throw Error('まだ再生できる映像がありません。数秒後にもう一度保存してください。');
+  const now=new Date();
+  const item={id:crypto.randomUUID(),name:`Replay_${fileStamp(now)}`,kind:'replay',continuous:true,created:now.getTime(),
+    partIds:parts.map(part=>part.id),rangeStart:Math.max(0,target-settings.duration*60),rangeEnd:target,
+    seconds:Math.min(settings.duration*60,Math.max(0,target-parts[0].mediaStart)),bytes:parts.reduce((sum,part)=>sum+part.bytes,0),mime:'video/mp4',orientation:recordingOrientation};
+  await putSaved(item);await refreshLibrary();
+  toast(`${rotationStopped?'端末の向きが変わったため録画を終了しました。':''}リプレイを保存しました（連続録画・${formatDuration(item.seconds)}）`);
+}
+async function runContinuousReplay(){
+  let instance,worker,finished=false,workerFailed=false,writeQueue=Promise.resolve(),failure=null;
+  const finish=async()=>{
+    if(finished)return;finished=true;
+    await writeQueue;
+    if(pendingReplaySave&&liveParts.length){
+      pendingReplaySave=false;
+      try{await saveContinuousSnapshot(Math.min(pendingMediaTime,liveParts.at(-1).mediaEnd));}
+      catch(error){toast(`保存に失敗しました: ${error.message}`,8000);}
+    }
+    worker?.terminate();
+    recorder=null;running=false;starting=false;stopping=false;savingReplay=false;pendingReplaySave=false;
+    liveParts=[];releaseCamera();
+    await reclaimParts().catch(()=>{});updateControls();updateStorage();
+    if(failure)toast(`連続録画を終了しました: ${failure.message||failure} 保存済みの動画は残っています。`,10000);
+  };
+  const fail=error=>{
+    failure=error;workerFailed=true;
+    if(liveParts.length){pendingReplaySave=true;pendingMediaTime=liveParts.at(-1).mediaEnd;}
+    running=false;stopping=true;updateControls();
+    if(instance?.state==='recording')instance.stop();else void finish();
+  };
+  try{
+    instance=makeRecorder();recorder=instance;
+    worker=new Worker(new URL('./continuous-replay-worker.js',import.meta.url),{type:'module'});
+    worker.onmessage=({data})=>{
+      if(data.type==='error'){fail(Error(data.message));return;}
+      if(data.type==='fragment'){
+        writeQueue=writeQueue.then(async()=>{
+          const part={blob:data.blob,bytes:data.blob.size,mime:'video/mp4',started:startedAt+data.first*1000,ended:startedAt+data.last*1000,mediaStart:data.first,mediaEnd:data.last,hasKey:data.hasKey,keyTime:data.keyTime};
+          const id=await addPart(part);
+          measuredBytes+=part.bytes;measuredSeconds=Math.max(measuredSeconds,data.last);recordingStats=data.stats;
+          liveParts.push({...part,id,blob:undefined});
+          const selected=selectContinuousParts(liveParts,data.last,settings.duration*60),keep=new Set(selected.map(item=>item.id));
+          const expired=liveParts.filter(item=>!keep.has(item.id));liveParts=selected;
+          await deleteExpiredParts(expired);
+          if(pendingReplaySave&&data.last>=pendingMediaTime){
+            const target=pendingMediaTime;pendingReplaySave=false;
+            try{await saveContinuousSnapshot(target);}catch(error){toast(`保存できませんでした: ${error.message}`,8000);}
+            savingReplay=false;
+          }
+          updateControls();setCameraFacts();
+        }).catch(fail);
+      }else if(data.type==='finished')void finish();
+    };
+    worker.onerror=event=>{event.preventDefault();fail(Error('連続録画データの処理に失敗しました'));};
+    worker.onmessageerror=()=>fail(Error('連続録画データを受信できませんでした'));
+    instance.ondataavailable=event=>{if(event.data?.size&&!workerFailed)worker.postMessage({type:'append',blob:event.data});};
+    instance.onerror=event=>fail(event.error||Error('録画処理が中断されました'));
+    instance.onstop=()=>{running=false;stopping=true;updateControls();if(workerFailed)void finish();else worker.postMessage({type:'finish'});};
+    instance.start(1000);
+  }catch(error){fail(error);}
+}
+async function runSegmentedReplay(){
   try{
     const stopCapture=()=>{running=false;if(recorder?.state==='recording')recorder.stop();};
     for await(const item of capturePipeline(recordSegment,()=>running,stopCapture)){
@@ -372,12 +443,12 @@ async function startRecording(){
     await openDB();
     await enableCamera();
     navigator.storage?.persist?.().catch(()=>{});
-    liveParts=[];measuredBytes=0;measuredSeconds=0;lockedMediaType='';captureSequence=0;activeSegmentSequence=0;
+    liveParts=[];measuredBytes=0;measuredSeconds=0;lockedMediaType='';captureSequence=0;activeSegmentSequence=0;recordingStats=null;continuousReplay=mode==='replay'&&chooseMimeType().startsWith('video/mp4')&&typeof Worker!=='undefined';
     startedAt=Date.now();
     recordingOrientation=actualOrientation();
     running=true;starting=false;
     updateControls();
-    if(mode==='replay')void runReplay();
+    if(mode==='replay'){if(continuousReplay)void runContinuousReplay();else{toast('互換録画モードです。区間切り替え時に映像が途切れる場合があります。',7000);void runSegmentedReplay();}}
     else runStandard();
   }catch(error){
     starting=false;running=false;
@@ -391,6 +462,11 @@ function saveReplay(){
   requestReplaySave();
 }
 function requestReplaySave(){
+  if(continuousReplay){
+    savingReplay=true;pendingReplaySave=true;pendingMediaTime=(Date.now()-startedAt)/1000;updateControls();
+    if(recorder?.state==='recording')recorder.requestData();
+    return;
+  }
   savingReplay=true;pendingReplaySave=true;pendingSaveSequence=activeSegmentSequence;
   updateControls();
   if(recorder?.state==='recording')recorder.stop();
@@ -469,12 +545,15 @@ function openClip(item){
   revokePreview();
   ui.clipTitle.textContent=item.kind==='replay'?'リプレイ録画':'通常録画';
   ui.clipDescription.textContent=`${item.orientation&&item.orientation!=='unknown'?orientationLabel(item.orientation)+' · ':''}${dateLabel(item.created)} · ${formatDuration(item.seconds)} · ${formatBytes(item.bytes)}${item.kind==='replay'?' · ダウンロード時に自動結合':' · 1本の動画'}`;
-  ui.exportAll.textContent=item.kind==='replay'&&item.partIds.length>1?'全区間を1本の動画にする':'動画をダウンロード';
+  ui.exportAll.textContent=item.kind==='replay'&&(item.partIds.length>1||item.continuous)?'全区間を1本の動画にする':'動画をダウンロード';
   ui.exportZip.hidden=item.kind!=='replay';
+  ui.exportZip.textContent=item.continuous?'元データをZIPで保存':'ZIPで保存';
   ui.exportProgress.hidden=true;
   clearDownload();
   ui.segments.replaceChildren();
-  if(item.kind==='replay'){
+  if(item.kind==='replay'&&item.continuous){
+    addText(ui.segments,'p','録画を止めずに保存した連続データです。全区間を元の時刻どおりにつなぎ、1本の動画にして保存します。開始・終了位置はキーフレームに合わせて数秒前後します。元データのZIPは復旧用で、区間を単体で再生できない場合があります。','dialog-description');
+  }else if(item.kind==='replay'){
     addText(ui.segments,'p','この録画の全区間を順番につなぎ、音声がある場合は音声も保った1本の動画として出力します。256MB制限はありませんが、端末の空き容量が必要です。写真への保存は結合後の共有ボタンから行います。元の区間の欠落は修復できません。','dialog-description');
     item.partIds.forEach((id,index)=>{
       const row=document.createElement('div');row.className='segment';
@@ -554,14 +633,15 @@ async function exportClip(asZip=false){
       const full=new Blob(entries.map(x=>x.blob),{type});
       ui.exportProgress.textContent='動画を書き出しています…';
       await saveBlob(full,`${item.name}.${extensionFor(type)}`);
-    }else if(entries.length===1&&!asZip){
+    }else if(entries.length===1&&!asZip&&!item.continuous){
       await saveBlob(entries[0].blob,`${item.name}.${extensionFor(item.mime)}`);
     }else if(asZip){
+      if(item.continuous)entries.push({name:'replay-manifest.json',blob:new Blob([JSON.stringify({format:'ReplayCam continuous MP4 fragments',version:1,rangeStart:item.rangeStart,rangeEnd:item.rangeEnd,parts:entries.map(entry=>entry.name)},null,2)],{type:'application/json'})});
       const zip=await createZip(entries,(n,total)=>{ui.exportProgress.textContent=`ZIP作成中 ${n}/${total}`;});
       await saveBlob(zip,`${item.name}.zip`);
     }else{
       ui.exportProgress.textContent=`全区間を1本にしています 0/${entries.length}`;
-      const result=await mergeReplayLocally(entries.map(entry=>entry.blob),(done,total)=>{ui.exportProgress.textContent=`全区間を1本にしています ${done}/${total}`;});
+      const result=await mergeReplayLocally(entries.map(entry=>entry.blob),(done,total)=>{ui.exportProgress.textContent=`全区間を1本にしています ${done}/${total}`;},{continuous:!!item.continuous,startTime:item.rangeStart,endTime:item.rangeEnd});
       try{await saveBlob(result.blob,`${item.name}.${extensionFor(result.blob.type)}`,result.release);}
       catch(error){await result.release();throw error;}
     }
