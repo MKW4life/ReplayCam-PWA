@@ -69,3 +69,7 @@
   .camera-card{max-height:calc(100svh - 116px)}
   .camera-preview{height:calc(100svh - 120px)}
 }
+
+.clip-info{flex:1}.clip-row-actions{display:flex;gap:6px;align-items:center;flex-shrink:0}
+.delete-clip{width:44px;height:44px;display:grid;place-items:center;border:1px solid #4a343b;border-radius:8px;background:transparent;color:#d99ba3;padding:9px}
+.delete-clip:hover:not(:disabled){background:#3a2025}.delete-clip svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}

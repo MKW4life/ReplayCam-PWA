@@ -1,5 +1,5 @@
 import {SEGMENT_LENGTH_MS, safeSettings, formatDuration, formatBytes, chooseMimeType, extensionFor, selectReplayParts, selectContinuousParts, fileStamp, resolutionDimensions, targetVideoBitrate, estimateRecordingBytes, cameraLabel, captureOrientation, orientationLabel, containedFrame} from './lib.js';
-import {openDB, addPart, getPart, deletePart, putSaved, deleteSaved, listSaved, reclaimParts} from './storage.js';
+import {openDB, addPart, getPart, deletePart, putSaved, putReplaySnapshot, deleteSaved, listSaved, reclaimParts} from './storage.js';
 import {createZip} from './zip.js';
 import {requestCamera} from './camera.js';
 import {capturePipeline} from './replay-pipeline.js';
@@ -47,6 +47,7 @@ let sharing=false;
 let toastTimeout=0;
 let libraryBusy=false;
 let exporting=false;
+let deletingClip=false;
 let measuredBytes=0;
 let measuredSeconds=0;
 let wasHiddenDuringRecording=false;
@@ -277,7 +278,8 @@ async function saveContinuousSnapshot(target){
   const item={id:crypto.randomUUID(),name:`Replay_${fileStamp(now)}`,kind:'replay',continuous:true,created:now.getTime(),
     partIds:parts.map(part=>part.id),rangeStart:Math.max(0,target-settings.duration*60),rangeEnd:target,
     seconds:Math.min(settings.duration*60,Math.max(0,target-parts[0].mediaStart)),bytes:parts.reduce((sum,part)=>sum+part.bytes,0),mime:'video/mp4',orientation:recordingOrientation};
-  await putSaved(item);await refreshLibrary();
+  const saved=await putReplaySnapshot(item);await refreshLibrary();
+  if(!saved.created){toast('この区間は保存済みです。新しい映像が増えると、別の録画として保存できます。');return;}
   toast(`${rotationStopped?'端末の向きが変わったため録画を終了しました。':''}リプレイを保存しました（連続録画・${formatDuration(item.seconds)}）`);
 }
 async function runContinuousReplay(){
@@ -298,7 +300,9 @@ async function runContinuousReplay(){
   };
   const fail=error=>{
     failure=error;workerFailed=true;
-    if(liveParts.length){pendingReplaySave=true;pendingMediaTime=liveParts.at(-1).mediaEnd;}
+    // Finish an outstanding user save, but never invent a second save
+    // request after the user's snapshot has already completed.
+    if(pendingReplaySave&&liveParts.length)pendingMediaTime=Math.min(pendingMediaTime,liveParts.at(-1).mediaEnd);
     running=false;stopping=true;updateControls();
     if(instance?.state==='recording')instance.stop();else void finish();
   };
@@ -383,8 +387,9 @@ async function saveReplaySnapshot(){
     partIds:parts.map(p=>p.id),seconds:parts.reduce((sum,p)=>sum+(p.ended-p.started)/1000,0),
     bytes:parts.reduce((sum,p)=>sum+p.bytes,0),mime:parts[0].mime,orientation:recordingOrientation
   };
-  await putSaved(item);
+  const saved=await putReplaySnapshot(item);
   await refreshLibrary();
+  if(!saved.created){toast('この区間は保存済みです。');return;}
   toast(`${rotationStopped?'端末の向きが変わったため録画を終了しました。':''}リプレイを保存しました（${formatDuration(item.seconds)}・${parts.length}区間）`);
 }
 function runStandard(){
@@ -507,9 +512,14 @@ async function refreshLibrary(){
       addText(info,'b',item.kind==='replay'?'リプレイ':'通常録画');
       addText(info,'small',`${dateLabel(item.created)} · ${formatDuration(item.seconds)} · ${formatBytes(item.bytes)}${item.orientation&&item.orientation!=='unknown'?' · '+orientationLabel(item.orientation):''}`);
       row.appendChild(info);
-      const btn=addText(row,'button','開く','open-clip');btn.type='button';
+      const actions=document.createElement('div');actions.className='clip-row-actions';
+      const btn=addText(actions,'button','開く','open-clip');btn.type='button';
       btn.addEventListener('click',()=>openClip(item));
-      ui.library.appendChild(row);
+      const remove=addText(actions,'button','','delete-clip');remove.type='button';
+      remove.title='削除';remove.setAttribute('aria-label',`${dateLabel(item.created)}の録画を削除`);
+      remove.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5m4-5v5"/></svg>';
+      remove.addEventListener('click',()=>void removeClip(item));
+      row.appendChild(actions);ui.library.appendChild(row);
     }
   }catch(error){toast(`動画一覧の読み込みに失敗しました: ${error.message}`);}
   finally{libraryBusy=false;updateStorage();}
@@ -654,18 +664,21 @@ async function exportClip(asZip=false){
     toast(`書き出しに失敗しました: ${error.message||error}`,7500);
   }finally{exporting=false;setExportControls(false);}
 }
-async function removeClip(){
-  if(!selectedItem||!confirm('この録画を削除しますか？ 削除後は元に戻せません。'))return;
-  const item=selectedItem;
+async function removeClip(item=selectedItem){
+  if(!item||deletingClip||exporting||sharing)return;
+  if(!confirm('この録画を削除しますか？ 削除後は元に戻せません。'))return;
+  deletingClip=true;
   try{
     await deleteSaved(item.id);
-    await reclaimParts(liveParts.map(part=>part.id));
-    selectedItem=null;
-    ui.dialog.close();
-    revokePreview();
+    // Active recorder writes can commit after a cleanup key scan starts.
+    // Let recording finalization reclaim unused parts after its writes settle.
+    const deferred=running||starting||stopping;
+    if(!deferred)await reclaimParts();
+    if(selectedItem?.id===item.id){selectedItem=null;ui.dialog.close();revokePreview();}
     await refreshLibrary();
-    toast('録画を削除しました');
+    toast(deferred?'一覧から削除しました。容量は録画終了後に整理します。':'録画を削除しました');
   }catch(error){toast(`削除できませんでした: ${error.message}`);}
+  finally{deletingClip=false;}
 }
 function updateClock(){
   if(!running){ui.elapsed.textContent='00:00';return;}
@@ -707,7 +720,7 @@ function bindEvents(){
   ui.exportAll.addEventListener('click',()=>exportClip());
   ui.exportZip.addEventListener('click',()=>exportClip(true));
   ui.shareVideo.addEventListener('click',sharePreparedVideo);
-  ui.deleteClip.addEventListener('click',removeClip);
+  ui.deleteClip.addEventListener('click',()=>void removeClip());
   window.addEventListener('online',updateConnection);
   window.addEventListener('offline',updateConnection);
   document.addEventListener('visibilitychange',()=>{

@@ -62,7 +62,7 @@ test('real browser recording exports a merged file with audio, explicit ZIP and 
   expect((await zipEvent).suggestedFilename()).toMatch(/\.zip$/);
   await page.locator('#dialog-close').click();
   await page.reload();
-  await expect(page.locator('#version')).toContainText('v0.4.2');
+  await expect(page.locator('#version')).toContainText('v0.4.3');
   expect(await page.evaluate(()=>caches.has('unrelated-project-cache'))).toBe(true);
   expect(errors).toEqual([]);
 });
@@ -344,4 +344,106 @@ test('settings keep the high-resolution fps notice visible and hide optional exp
   await page.locator('#resolution').selectOption('1080');
   await expect(page.locator('#quality-note')).toBeHidden();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
+
+test('identical replay parts are registered once even with simultaneous save requests',async({page})=>{
+  await page.goto('/');
+  const result=await page.evaluate(async()=>{
+    await navigator.serviceWorker.ready;
+    const {addPart,putReplaySnapshot,listSaved,getPart,deleteSaved}=await import('./storage.js');
+    const blob=new Blob(['fixture']),a=await addPart({blob}),b=await addPart({blob});
+    const base={kind:'replay',continuous:true,partIds:[a],created:Date.now(),name:'First',seconds:1,bytes:7,mime:'video/mp4',rangeStart:0,rangeEnd:1};
+    const results=await Promise.all([putReplaySnapshot(base),putReplaySnapshot({...base,name:'Duplicate',rangeEnd:1.01})]);
+    const first=await listSaved();
+    await putReplaySnapshot({...base,partIds:[a,b],name:'Later'});
+    const laterCount=(await listSaved()).length;
+    await deleteSaved(first[0].id);const restored=await putReplaySnapshot(base);
+    return {count:first.length,created:results.filter(item=>item.created).length,sameId:results[0].item.id===results[1].item.id,rangeEnd:first[0].rangeEnd,laterCount,retained:!!await getPart(a),resaved:restored.created};
+  });
+  expect(result).toEqual({count:1,created:1,sameId:true,rangeEnd:1,laterCount:2,retained:true,resaved:true});
+});
+
+test('library deletion needs no open dialog and preserves shared media',async({page})=>{
+  await page.goto('/');
+  await page.evaluate(async()=>{
+    await navigator.serviceWorker.ready;
+    const {addPart,putSaved}=await import('./storage.js');
+    const a=await addPart({blob:new Blob(['shared'])}),b=await addPart({blob:new Blob(['exclusive'])});
+    window.partKeys={a,b};
+    await putSaved({id:'keep-shared',name:'Keep',kind:'replay',partIds:[a],seconds:1,bytes:6,created:1});
+    await putSaved({id:'remove-from-list',name:'Remove',kind:'replay',partIds:[a,b],seconds:2,bytes:15,created:2});
+  });
+  await page.locator('#refresh-library').click();
+  const row=page.locator('.clip-row').first();
+  page.once('dialog',dialog=>dialog.dismiss());await row.locator('.delete-clip').click();
+  await expect(page.locator('.clip-row')).toHaveCount(2);
+  page.once('dialog',dialog=>dialog.accept());await row.locator('.delete-clip').click();
+  await expect(page.locator('.clip-row')).toHaveCount(1);
+  expect(await page.locator('#clip-dialog').evaluate(dialog=>dialog.open)).toBe(false);
+  expect(await page.evaluate(async()=>{const {getPart}=await import('./storage.js');return {shared:!!await getPart(partKeys.a),exclusive:!!await getPart(partKeys.b)};})).toEqual({shared:true,exclusive:false});
+  await page.screenshot({path:test.info().outputPath('library-delete.png')});
+  await page.locator('.open-clip').click();
+  page.once('dialog',dialog=>dialog.accept());await page.locator('#delete-clip').click();
+  await expect(page.locator('.clip-row')).toHaveCount(0);
+  expect(await page.locator('#clip-dialog').evaluate(dialog=>dialog.open)).toBe(false);
+});
+
+
+test('a completed replay save is not duplicated by recorder error recovery',async({page})=>{
+  await page.addInitScript(()=>{
+    const NativeWorker=Worker;
+    window.Worker=class extends NativeWorker{
+      constructor(url,options){super(url,options);if(String(url).includes('continuous-replay-worker'))window.replayWorker=this;}
+    };
+  });
+  await page.goto('/');await page.locator('#resolution').selectOption('720');await page.locator('#fps').selectOption('30');
+  await page.locator('#start-button').click();await expect(page.locator('#save-button')).toBeEnabled();
+  await page.waitForTimeout(1300);await page.locator('#save-button').click();
+  await expect(page.locator('.clip-row')).toHaveCount(1);
+  await page.evaluate(()=>replayWorker.dispatchEvent(new MessageEvent('message',{data:{type:'error',message:'simulated recorder failure'}})));
+  await expect(page.locator('#start-button')).toBeEnabled();
+  await expect(page.locator('.clip-row')).toHaveCount(1);
+});
+
+
+test('recorder failure still completes a pending requested save',async({page})=>{
+  await page.addInitScript(()=>{
+    const NativeWorker=Worker;
+    window.Worker=class extends NativeWorker{constructor(url,options){super(url,options);if(String(url).includes('continuous-replay-worker'))window.replayWorker=this;}};
+  });
+  await page.goto('/');await page.locator('#resolution').selectOption('720');await page.locator('#fps').selectOption('30');
+  await page.locator('#start-button').click();await expect(page.locator('#save-button')).toBeEnabled();
+  // Wait for real encoded media to reach the buffer before fault injection.
+  await expect(page.locator('#camera-facts')).toContainText('保存');
+  await page.waitForTimeout(100);
+  await page.evaluate(()=>{
+    document.querySelector('#save-button').click();
+    replayWorker.dispatchEvent(new MessageEvent('message',{data:{type:'error',message:'simulated recorder failure'}}));
+  });
+  await expect(page.locator('#start-button')).toBeEnabled();
+  await expect(page.locator('.clip-row')).toHaveCount(1);
+});
+
+
+test('deleting an old clip during standard recording preserves the active recording',async({page})=>{
+  await page.goto('/');await page.evaluate(async()=>{
+    await navigator.serviceWorker.ready;
+    const {addPart,putSaved}=await import('./storage.js');
+    window.oldPart=await addPart({blob:new Blob(['old data'])});
+    await putSaved({id:'old-while-recording',partIds:[oldPart],name:'Old',kind:'replay',created:Date.now(),seconds:1,bytes:8});
+  });
+  await page.locator('#refresh-library').click();await page.locator('#mode-standard').click();
+  await page.locator('#resolution').selectOption('720');await page.locator('#fps').selectOption('30');await page.locator('#start-button').click();
+  await expect.poll(()=>page.evaluate(async()=>{
+    const {openDB}=await import('./storage.js');const db=await openDB();return new Promise(resolve=>{const request=db.transaction('parts').objectStore('parts').getAllKeys();request.onsuccess=()=>resolve(request.result.length);});
+  }),{timeout:10000}).toBeGreaterThan(1);
+  page.once('dialog',dialog=>dialog.accept());await page.locator('.delete-clip').click();
+  await expect(page.locator('.clip-row')).toHaveCount(0);await expect(page.locator('#stop-button')).toBeEnabled();
+  await page.locator('#stop-button').click();await expect(page.locator('#start-button')).toBeEnabled();await expect(page.locator('.clip-row')).toHaveCount(1);
+  expect(await page.evaluate(async()=>{const {getPart}=await import('./storage.js');return !!await getPart(oldPart);})).toBe(false);
+  await page.locator('.open-clip').click();const event=page.waitForEvent('download');await page.locator('#export-all').click();
+  await expect(page.locator('#download-result')).toBeVisible();if(await page.locator('#share-video').isVisible())await page.locator('#download-result').click();
+  const input=new Input({source:new BlobSource(new Blob([await readFile(await(await event).path())])),formats:[MP4,WEBM]});
+  try{expect(await input.computeDuration()).toBeGreaterThan(2);let frames=0;for await(const packet of new EncodedPacketSink(await input.getPrimaryVideoTrack()).packets())frames++;expect(frames).toBeGreaterThan(30);expect(await input.getPrimaryAudioTrack()).toBeTruthy();}finally{input.dispose();}
 });

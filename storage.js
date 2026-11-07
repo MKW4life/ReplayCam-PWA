@@ -58,6 +58,28 @@ export async function getPart(id){
 export const deletePart=id=>run('parts','readwrite',store=>store.delete(id));
 export const listParts=()=>run('parts','readonly',store=>store.getAll());
 export const putSaved=item=>run('saved','readwrite',store=>store.put(item));
+
+// The same ordered media parts represent the same available replay snapshot.
+// Give them a stable key and check/insert in ONE readwrite transaction so
+// repeated taps and automatic recovery cannot create two library entries.
+export async function putReplaySnapshot(item){
+  const key=new TextEncoder().encode(JSON.stringify({continuous:!!item.continuous,partIds:item.partIds}));
+  const digest=await crypto.subtle.digest('SHA-256',key);
+  const id='replay-'+Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
+  const db=await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction('saved','readwrite'),store=tx.objectStore('saved');
+    const request=store.get(id);let result;
+    request.onsuccess=()=>{
+      if(request.result){result={item:request.result,created:false};return;}
+      const saved={...item,id};store.add(saved);result={item:saved,created:true};
+    };
+    tx.oncomplete=()=>resolve(result);
+    tx.onerror=()=>reject(tx.error||request.error);
+    tx.onabort=()=>reject(tx.error||Error('リプレイの保存が中断されました'));
+  });
+}
+
 export const getSaved=id=>run('saved','readonly',store=>store.get(id));
 export const deleteSaved=id=>run('saved','readwrite',store=>store.delete(id));
 export const listSaved=()=>run('saved','readonly',store=>store.getAll());

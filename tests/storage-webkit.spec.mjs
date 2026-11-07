@@ -68,3 +68,18 @@ test('reclaim reads only keys and preserves saved and live recordings',async({pa
   });
   expect(result).toEqual({count:1,saved:true,live:true,expired:false});
 });
+
+
+test('WebKit registers duplicate replay saves atomically and allows re-save after deletion',async({page})=>{
+  await page.goto('/');
+  const result=await page.evaluate(async()=>{
+    await navigator.serviceWorker.ready;
+    const {addPart,putReplaySnapshot,listSaved,deleteSaved}=await import('./storage.js');
+    const id=await addPart({blob:new Blob(['replay fixture'])}),item={kind:'replay',continuous:true,partIds:[id],created:Date.now(),name:'Replay',seconds:1,bytes:14};
+    const results=await Promise.all([putReplaySnapshot(item),putReplaySnapshot(item)]);
+    const saved=await listSaved();await deleteSaved(saved[0].id);
+    const restored=await putReplaySnapshot(item);
+    return {count:saved.length,created:results.filter(result=>result.created).length,resaved:restored.created};
+  });
+  expect(result).toEqual({count:1,created:1,resaved:true});
+});
