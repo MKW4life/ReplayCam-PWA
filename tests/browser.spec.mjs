@@ -59,7 +59,7 @@ test('real browser recording exports a merged file with audio, explicit ZIP and 
   expect((await zipEvent).suggestedFilename()).toMatch(/\.zip$/);
   await page.locator('#dialog-close').click();
   await page.reload();
-  await expect(page.locator('#version')).toContainText('v0.4.0');
+  await expect(page.locator('#version')).toContainText('v0.4.1');
   expect(await page.evaluate(()=>caches.has('unrelated-project-cache'))).toBe(true);
   expect(errors).toEqual([]);
 });
@@ -297,4 +297,26 @@ test('continuous replay never restarts at 15 seconds or on Save despite slow sto
     expect(await input.getPrimaryAudioTrack()).toBeTruthy();
     expect(await input.computeDuration()).toBeGreaterThan(16);
   }finally{input.dispose();}
+});
+
+
+test('legacy Blob recordings remain exportable without changing their stored records',async({page})=>{
+  await page.goto('/');
+  await page.evaluate(async()=>{
+    const {openDB,putSaved}=await import('./storage.js');
+    const blob=await(await fetch('./tests/fixtures/av.mp4')).blob(),db=await openDB();
+    const id=await new Promise((resolve,reject)=>{
+      const tx=db.transaction('parts','readwrite'),request=tx.objectStore('parts').add({blob,mime:'video/mp4',bytes:blob.size});
+      tx.oncomplete=()=>resolve(request.result);tx.onabort=()=>reject(tx.error);
+    });
+    await putSaved({id:'legacy-blob',name:'LegacyBlob',kind:'replay',created:Date.now(),partIds:[id],seconds:0.6,bytes:blob.size,mime:'video/mp4'});
+    const {getPart}=await import('./storage.js');
+    const copy=await getPart(id);if(copy.blob.size!==blob.size)throw Error('Legacy size changed');
+  });
+  await page.reload();await page.locator('.open-clip').click();
+  const event=page.waitForEvent('download');await page.locator('#export-all').click();
+  await expect(page.locator('#download-result')).toBeVisible();
+  if(await page.locator('#share-video').isVisible())await page.locator('#download-result').click();
+  const input=new Input({source:new BlobSource(new Blob([await readFile(await(await event).path())])),formats:[MP4]});
+  try{let frames=0;for await(const packet of new EncodedPacketSink(await input.getPrimaryVideoTrack()).packets())frames++;expect(frames).toBe(6);}finally{input.dispose();}
 });

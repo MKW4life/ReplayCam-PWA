@@ -2,3 +2,4 @@ node_modules/
 .superpowers/
 test-results/
 playwright-report/
+test-results-webkit/

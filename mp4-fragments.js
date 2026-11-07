@@ -83,11 +83,11 @@ export class Mp4FragmentCollector{
 export async function joinContinuousFragments(blobs){
   if(!blobs.length)throw Error('保存可能な動画区間がありません');
   const output=[];let outputOffset=0,initialized=false;
-  for(const blob of blobs){
+  for(const [index,blob] of blobs.entries()){
     let at=0,inFragment=false;const init=[];
     while(at<blob.size){
       const box=await boxHeader(blob.slice(at),true);
-      if(!box||at+box.size>blob.size)throw Error('保存された動画区間が不完全です');
+      if(!box||at+box.size>blob.size)throw Error(`保存された動画区間が不完全です（区間${index+1}・位置${at}・宣言サイズ${box?.size??'不明'}・残り${blob.size-at}バイト）`);
       const data=blob.slice(at,at+box.size);
       if(box.type==='ftyp'||box.type==='moov')init.push(data);
       else if(box.type==='moof'){

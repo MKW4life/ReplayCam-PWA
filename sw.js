@@ -1,4 +1,4 @@
-const CACHE = 'replaycam-static-v0.4.0';
+const CACHE = 'replaycam-static-v0.4.1';
 const FILES = ['./','./index.html','./styles.css','./app.js','./storage.js','./zip.js','./lib.js','./camera.js','./replay-pipeline.js','./mp4-fragments.js','./continuous-replay-worker.js','./merge-destination.js','./merge-client.js','./merge-worker.js','./merge.js','./vendor/mediabunny.js','./manifest.webmanifest','./icons/icon-180.png','./icons/icon-192.png','./icons/icon-512.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(FILES)).then(() => self.skipWaiting()));
