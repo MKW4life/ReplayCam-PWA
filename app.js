@@ -2,6 +2,7 @@ import {SEGMENT_LENGTH_MS, safeSettings, formatDuration, formatBytes, chooseMime
 import {openDB, addPart, getPart, deletePart, putSaved, deleteSaved, listSaved, reclaimParts} from './storage.js';
 import {createZip} from './zip.js';
 import {requestCamera} from './camera.js';
+import {capturePipeline} from './replay-pipeline.js';
 import {mergeReplayLocally} from './merge-client.js';
 
 const el=id=>document.getElementById(id);
@@ -27,6 +28,9 @@ let starting=false;
 let stopping=false;
 let savingReplay=false;
 let pendingReplaySave=false;
+let captureSequence=0;
+let activeSegmentSequence=0;
+let pendingSaveSequence=0;
 let currentMediaType='';
 let lockedMediaType='';
 let startedAt=0;
@@ -138,7 +142,7 @@ function handleDeviceRotation(){
   rotationStopped=true;
   // Replay normally discards the unsaved buffer when stopped. Snapshot it
   // before stopping so rotating the phone cannot discard the current take.
-  if(mode==='replay')saveReplay();
+  if(mode==='replay')requestReplaySave();
   stopRecording();
   toast('端末の向きが変わったため録画を終了します。保存済みを確認してから再開してください。',8000);
 }
@@ -222,6 +226,8 @@ function makeRecorder(){
   return instance;
 }
 function recordSegment(){
+  const sequence=++captureSequence;
+  activeSegmentSequence=sequence;
   return new Promise((resolve,reject)=>{
     const chunks=[];
     const itemStart=Date.now();
@@ -241,7 +247,7 @@ function recordSegment(){
       if(recorder===instance)recorder=null;
       const blob=new Blob(chunks,{type:instance.mimeType||currentMediaType});
       if(blob.size)lockedMediaType=blob.type;
-      resolve({blob,started:itemStart,ended:Date.now(),mime:blob.type||currentMediaType});
+      resolve({blob,started:itemStart,ended:Date.now(),mime:blob.type||currentMediaType,sequence});
     };
     try{
       instance.start();
@@ -257,8 +263,8 @@ async function deleteExpiredParts(expired){
 }
 async function runReplay(){
   try{
-    while(running){
-      const item=await recordSegment();
+    const stopCapture=()=>{running=false;if(recorder?.state==='recording')recorder.stop();};
+    for await(const item of capturePipeline(recordSegment,()=>running,stopCapture)){
       if(item.blob.size>0){
         const id=await addPart({...item,bytes:item.blob.size});
         measuredBytes+=item.blob.size;measuredSeconds+=(item.ended-item.started)/1000;
@@ -269,12 +275,12 @@ async function runReplay(){
         liveParts=selected;
         // Avoid scanning all recorded blobs on every 15-second segment.
         await deleteExpiredParts(expired);
-        if(pendingReplaySave){
+        if(pendingReplaySave&&item.sequence>=pendingSaveSequence){
           pendingReplaySave=false;
           try{await saveReplaySnapshot();}catch(error){toast(`保存に失敗しました: ${error.message}`,7000);}
           savingReplay=false;
         }
-      }else if(pendingReplaySave){
+      }else if(pendingReplaySave&&item.sequence>=pendingSaveSequence){
         pendingReplaySave=false;savingReplay=false;
         toast('まだ録画データがありません。数秒後にもう一度試してください。');
       }
@@ -366,7 +372,7 @@ async function startRecording(){
     await openDB();
     await enableCamera();
     navigator.storage?.persist?.().catch(()=>{});
-    liveParts=[];measuredBytes=0;measuredSeconds=0;lockedMediaType='';
+    liveParts=[];measuredBytes=0;measuredSeconds=0;lockedMediaType='';captureSequence=0;activeSegmentSequence=0;
     startedAt=Date.now();
     recordingOrientation=actualOrientation();
     running=true;starting=false;
@@ -382,7 +388,10 @@ async function startRecording(){
 }
 function saveReplay(){
   if(mode!=='replay'||!running||savingReplay||stopping)return;
-  savingReplay=true;pendingReplaySave=true;
+  requestReplaySave();
+}
+function requestReplaySave(){
+  savingReplay=true;pendingReplaySave=true;pendingSaveSequence=activeSegmentSequence;
   updateControls();
   if(recorder?.state==='recording')recorder.stop();
 }

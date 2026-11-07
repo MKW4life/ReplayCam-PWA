@@ -59,7 +59,7 @@ test('real browser recording exports a merged file with audio, explicit ZIP and 
   expect((await zipEvent).suggestedFilename()).toMatch(/\.zip$/);
   await page.locator('#dialog-close').click();
   await page.reload();
-  await expect(page.locator('#version')).toContainText('v0.3.1');
+  await expect(page.locator('#version')).toContainText('v0.3.2');
   expect(await page.evaluate(()=>caches.has('unrelated-project-cache'))).toBe(true);
   expect(errors).toEqual([]);
 });
@@ -247,4 +247,43 @@ test('60fps is requested first and lower camera fps is labeled accurately',async
   await expect(page.locator('#capture-fps')).toContainText('保存動画の実際のfps');
   await page.locator('#stop-button').click();
   await expect(page.locator('#start-button')).toBeEnabled();
+});
+
+test('replay restarts capture before a slow segment write completes',async({page})=>{
+  await page.addInitScript(()=>{
+    window.captureEvents=[];
+    const start=MediaRecorder.prototype.start;
+    MediaRecorder.prototype.start=function(...args){captureEvents.push('capture');return start.apply(this,args);};
+    const complete=Object.getOwnPropertyDescriptor(IDBTransaction.prototype,'oncomplete');
+    Object.defineProperty(IDBTransaction.prototype,'oncomplete',{
+      configurable:true,get:complete.get,
+      set(handler){
+        if(typeof handler!=='function'||this.mode!=='readwrite'||!this.objectStoreNames.contains('parts')){complete.set.call(this,handler);return;}
+        complete.set.call(this,event=>setTimeout(()=>{captureEvents.push('stored');handler.call(this,event);},700));
+      }
+    });
+  });
+  await page.goto('/');
+  await page.locator('#resolution').selectOption('720');
+  await page.locator('#fps').selectOption('30');
+  await page.locator('#start-button').click();
+  await expect(page.locator('#save-button')).toBeEnabled();
+  await page.waitForTimeout(1200);
+  await page.locator('#save-button').click();
+  await expect.poll(()=>page.evaluate(()=>captureEvents.filter(item=>item==='capture').length)).toBe(2);
+  await page.waitForTimeout(150);
+  // Rotate while the old segment is still being persisted. The final saved
+  // snapshot must also include the newly active segment, not only the old one.
+  await page.setViewportSize({width:844,height:390});
+  await expect(page.locator('.clip-row')).toHaveCount(1);
+  const events=await page.evaluate(()=>captureEvents);
+  expect(events.slice(0,3)).toEqual(['capture','capture','stored']);
+  await expect(page.locator('#start-button')).toBeEnabled();
+  const snapshot=await page.evaluate(async()=>{
+    const {listSaved,getPart}=await import('./storage.js');
+    const [saved]=await listSaved();
+    const parts=await Promise.all(saved.partIds.map(getPart));
+    return {count:parts.length,bytes:parts.reduce((sum,part)=>sum+part.blob.size,0)};
+  });
+  expect(snapshot.count).toBe(2);expect(snapshot.bytes).toBeGreaterThan(1000);
 });
