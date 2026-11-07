@@ -70,3 +70,9 @@ export function captureOrientation(width,height) {
 export function orientationLabel(orientation) {
   return orientation==='landscape'?'横向き':orientation==='portrait'?'縦向き':orientation==='square'?'正方形':'向き未確認';
 }
+export function containedFrame(stageWidth,stageHeight,videoWidth,videoHeight){
+  if(![stageWidth,stageHeight,videoWidth,videoHeight].every(value=>Number.isFinite(value)&&value>0))return null;
+  const scale=Math.min(stageWidth/videoWidth,stageHeight/videoHeight);
+  const width=videoWidth*scale,height=videoHeight*scale;
+  return {left:(stageWidth-width)/2,top:(stageHeight-height)/2,width,height};
+}

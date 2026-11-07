@@ -1,4 +1,4 @@
-import {SEGMENT_LENGTH_MS, safeSettings, formatDuration, formatBytes, chooseMimeType, extensionFor, selectReplayParts, fileStamp, resolutionDimensions, targetVideoBitrate, estimateRecordingBytes, cameraLabel, captureOrientation, orientationLabel} from './lib.js';
+import {SEGMENT_LENGTH_MS, safeSettings, formatDuration, formatBytes, chooseMimeType, extensionFor, selectReplayParts, fileStamp, resolutionDimensions, targetVideoBitrate, estimateRecordingBytes, cameraLabel, captureOrientation, orientationLabel, containedFrame} from './lib.js';
 import {openDB, addPart, getPart, deletePart, putSaved, deleteSaved, listSaved, reclaimParts} from './storage.js';
 import {createZip} from './zip.js';
 import {requestCamera} from './camera.js';
@@ -6,7 +6,7 @@ import {mergeReplayLocally} from './merge-client.js';
 
 const el=id=>document.getElementById(id);
 const ui={
-  viewfinder:el('viewfinder'),orientationStatus:el('orientation-status'),fpsStatus:el('capture-fps'),shareVideo:el('share-video'),shareHelp:el('share-help'),
+  viewfinder:el('viewfinder'),frame:el('capture-boundary'),frameNote:el('frame-note'),orientationStatus:el('orientation-status'),fpsStatus:el('capture-fps'),shareVideo:el('share-video'),shareHelp:el('share-help'),
   video:el('camera'),empty:el('empty-camera'),start:el('start-button'),save:el('save-button'),stop:el('stop-button'),
   modeReplay:el('mode-replay'),modeStandard:el('mode-standard'),duration:el('duration'),resolution:el('resolution'),
   fps:el('fps'),audio:el('audio'),facing:el('facing'),cameraStatus:el('camera-status'),estimate:el('capacity-estimate'),estimateDetail:el('capacity-detail'),elapsed:el('elapsed'),counter:el('buffer-counter'),
@@ -115,6 +115,12 @@ function actualOrientation(){
   const actual=stream?.getVideoTracks()[0]?.getSettings?.()||{};
   return captureOrientation(ui.video.videoWidth||actual.width,ui.video.videoHeight||actual.height);
 }
+function updateCaptureBoundary(){
+  const frame=stream?containedFrame(ui.viewfinder.clientWidth,ui.viewfinder.clientHeight,ui.video.videoWidth,ui.video.videoHeight):null;
+  ui.frame.hidden=!frame;
+  if(frame){for(const [key,value] of Object.entries(frame))ui.frame.style[key]=`${value}px`;}
+  ui.frameNote.textContent=frame?'白い枠内が保存されます（切り抜きなし）':'録画開始後、白い枠内の映像が保存されます';
+}
 function updateOrientationStatus(){
   const orientation=stream?actualOrientation():(landscapeQuery.matches?'landscape':'portrait');
   ui.orientationStatus.textContent=stream
@@ -124,6 +130,7 @@ function updateOrientationStatus(){
   const width=ui.video.videoWidth||actual.width,height=ui.video.videoHeight||actual.height;
   if(width>0&&height>0)ui.viewfinder.style.setProperty('--camera-ratio',`${width} / ${height}`);
   else ui.viewfinder.style.removeProperty('--camera-ratio');
+  updateCaptureBoundary();
 }
 function handleDeviceRotation(){
   updateOrientationStatus();
@@ -579,6 +586,8 @@ function updateConnection(){
   ui.connectionLabel.textContent=offline?'オフライン':'ローカル保存';
 }
 function bindEvents(){
+  if('ResizeObserver' in window)new ResizeObserver(updateCaptureBoundary).observe(ui.viewfinder);
+  else window.addEventListener('resize',updateCaptureBoundary);
   ui.video.addEventListener('loadedmetadata',handleVideoResize);
   ui.video.addEventListener('resize',handleVideoResize);
   landscapeQuery.addEventListener('change',handleDeviceRotation);

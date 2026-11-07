@@ -28,11 +28,14 @@
       </div>
 
       <section class="camera-card" aria-label="カメラ映像">
+        <div class="camera-preview">
+          <div class="preview-top"><span class="record-indicator" id="record-indicator"><span class="red-dot"></span><span id="record-state">待機</span></span><span class="camera-facts" id="camera-facts">—</span></div>
         <div class="viewfinder" id="viewfinder">
           <video id="camera" autoplay playsinline muted aria-label="カメラのプレビュー"></video>
           <div class="empty-camera" id="empty-camera"><div class="camera-glyph" aria-hidden="true"><span></span></div><b>カメラ待機中</b><small>「録画開始」を押すとカメラが起動します</small></div>
-          <div class="preview-top"><span class="record-indicator" id="record-indicator"><span class="red-dot"></span><span id="record-state">待機</span></span><span class="camera-facts" id="camera-facts">—</span></div>
-          <div class="preview-bottom"><span id="elapsed" class="elapsed">00:00</span><span id="buffer-counter">保存範囲 3:00</span></div>
+          <div id="capture-boundary" class="capture-boundary" aria-hidden="true" hidden></div>
+        </div>
+          <div class="preview-bottom"><span id="elapsed" class="elapsed">00:00</span><small id="frame-note">録画開始後、白い枠内の映像が保存されます</small><span id="buffer-counter">保存範囲 3:00</span><div id="toast" class="toast" role="status" aria-live="polite"></div></div>
         </div>
         <div class="actions">
           <button type="button" id="start-button" class="button primary"><span class="circle-icon"></span><span>録画開始</span></button>
@@ -66,10 +69,9 @@
       <p class="help-text" id="mode-explanation">録画中、短い動画を端末内に保存して古いものから自動削除します。リプレイは現段階では複数の動画をZIPにまとめて出力します。</p>
       <p class="notice">録画中は画面を表示したままにしてください。画面ロック・アプリ切替で録画が止まることがあります。大切な動画は「ファイル」に書き出してください。</p>
     </main>
-    <footer>REPLAYCAM <span id="version">v0.3.0 試用版</span> · 動画は外部サーバーに送信されません</footer>
+    <footer>REPLAYCAM <span id="version">v0.3.1 試用版</span> · 動画は外部サーバーに送信されません</footer>
   </div>
 
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <dialog id="clip-dialog" class="clip-dialog">
     <div class="dialog-header"><div><div class="overline">SAVED VIDEO</div><h3 id="clip-title">録画</h3></div><button type="button" id="dialog-close" class="icon-button" aria-label="閉じる">✕</button></div>

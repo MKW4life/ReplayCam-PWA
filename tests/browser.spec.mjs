@@ -59,7 +59,7 @@ test('real browser recording exports a merged file with audio, explicit ZIP and 
   expect((await zipEvent).suggestedFilename()).toMatch(/\.zip$/);
   await page.locator('#dialog-close').click();
   await page.reload();
-  await expect(page.locator('#version')).toContainText('v0.3.0');
+  await expect(page.locator('#version')).toContainText('v0.3.1');
   expect(await page.evaluate(()=>caches.has('unrelated-project-cache'))).toBe(true);
   expect(errors).toEqual([]);
 });
@@ -80,6 +80,14 @@ test('landscape recording downloads landscape video and keeps the controls visib
   const view=await page.locator('#camera').evaluate(video=>({width:video.videoWidth,height:video.videoHeight,fit:getComputedStyle(video).objectFit}));
   expect(view.width).toBeGreaterThan(view.height);
   expect(view.fit).toBe('contain');
+  await expect(page.locator('#capture-boundary')).toBeVisible();
+  const framing=await page.evaluate(()=>{
+    const video=document.querySelector('#camera'),stage=video.getBoundingClientRect(),frame=document.querySelector('#capture-boundary').getBoundingClientRect();
+    const facts=document.querySelector('.preview-top').getBoundingClientRect(),footer=document.querySelector('.preview-bottom').getBoundingClientRect();
+    return {aspect:frame.width/frame.height,expected:video.videoWidth/video.videoHeight,inside:frame.left>=stage.left-1&&frame.right<=stage.right+1&&frame.top>=stage.top-1&&frame.bottom<=stage.bottom+1,overlaysOutside:facts.bottom<=stage.top+1&&footer.top>=stage.bottom-1};
+  });
+  expect(framing.aspect).toBeCloseTo(framing.expected,2);
+  expect(framing.inside).toBe(true);expect(framing.overlaysOutside).toBe(true);
   await page.screenshot({path:test.info().outputPath('landscape.png')});
   await page.waitForTimeout(1300);
   await page.locator('#stop-button').click();
