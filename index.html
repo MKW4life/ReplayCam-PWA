@@ -23,9 +23,11 @@
 
     <main>
       <div class="mode-tabs" role="group" aria-label="録画モード">
-        <button id="mode-replay" class="tab active" type="button" aria-pressed="true">リプレイバッファ</button>
+        <button id="mode-replay" class="tab active" type="button" aria-pressed="true">リプレイ録画</button>
         <button id="mode-standard" class="tab" type="button" aria-pressed="false">通常録画</button>
       </div>
+
+      <p class="mode-caption" id="mode-explanation"></p>
 
       <section class="camera-card" aria-label="カメラ映像">
         <div class="camera-preview">
@@ -35,7 +37,7 @@
           <div class="empty-camera" id="empty-camera"><div class="camera-glyph" aria-hidden="true"><span></span></div><b>カメラ待機中</b><small>「録画開始」を押すとカメラが起動します</small></div>
           <div id="capture-boundary" class="capture-boundary" aria-hidden="true" hidden></div>
         </div>
-          <div class="preview-bottom"><span id="elapsed" class="elapsed">00:00</span><small id="frame-note">録画開始後、白い枠内の映像が保存されます</small><span id="buffer-counter">保存範囲 3:00</span><div id="toast" class="toast" role="status" aria-live="polite"></div></div>
+          <div class="preview-bottom"><span id="elapsed" class="elapsed">00:00</span><small id="frame-note">白枠が録画範囲です</small><span id="buffer-counter">保存範囲 3:00</span><div id="toast" class="toast" role="status" aria-live="polite"></div></div>
         </div>
         <div class="actions">
           <button type="button" id="start-button" class="button primary"><span class="circle-icon"></span><span>録画開始</span></button>
@@ -44,21 +46,31 @@
         </div>
       </section>
 
+      <p class="recording-reminder">録画中はこの画面を開いたままにしてください</p>
+
       <section class="settings-panel" aria-labelledby="settings-heading">
-        <div class="section-title"><h2 id="settings-heading">録画設定</h2><span class="section-sub" id="settings-note">録画開始前に変更できます</span></div>
+        <div class="section-title"><h2 id="settings-heading">録画設定</h2><span class="section-sub" id="settings-note">録画前に設定</span></div>
         <div class="field-grid">
           <label class="field" id="duration-field"><span>リプレイ時間</span><select id="duration"><option value="3">3分</option><option value="5">5分</option><option value="10">10分</option><option value="15">15分</option></select></label>
-          <label class="field"><span>希望する解像度</span><select id="resolution"><option value="2160">4K（2160p）</option><option value="1440">1440p（QHD）</option><option value="1080" selected>1080p（フルHD）</option><option value="720">720p（HD）</option></select></label>
+          <label class="field"><span>画質</span><select id="resolution"><option value="2160">4K（2160p）</option><option value="1440">1440p（QHD）</option><option value="1080" selected>1080p（フルHD）</option><option value="720">720p（HD）</option></select></label>
           <label class="field"><span>フレームレート</span><select id="fps"><option value="60">60fps</option><option value="30">30fps</option></select></label>
           <label class="field"><span>音声</span><select id="audio"><option value="on">ON</option><option value="off">OFF</option></select></label>
         </div>
-        <label class="field camera-field"><span>使用するカメラ</span><select id="facing"><option value="environment">外カメラ（背面）</option><option value="user">内カメラ（前面）</option></select></label>
-        <p class="camera-status" id="camera-status" role="status"></p>
-        <p class="orientation-status" id="orientation-status" role="status"></p>
-        <p class="capture-fps" id="capture-fps" role="status"></p>
-        <p class="orientation-help">横向きで撮るときは、端末の画面回転ロックを解除して横に持ち、「録画開始」を押してください。録画途中で向きを変えると、その時点までを保存して終了します。</p>
-        <div class="storage-estimate"><strong id="capacity-estimate"></strong><small id="capacity-detail"></small><small>保存済み動画は別途容量を使用します。結合・書き出し中は追加のメモリや容量が必要です。</small></div>
-        <div class="settings-footer"><span id="storage-display">保存領域 —</span></div>
+        <label class="field camera-field"><span>カメラ</span><select id="facing"><option value="environment">外カメラ（背面）</option><option value="user">内カメラ（前面）</option></select></label>
+        <p class="quality-note" id="quality-note" hidden><strong>1440p以上は30fpsに制限される場合があります</strong><span>60fpsで撮るなら1080p以下を選択</span></p>
+        <div class="storage-estimate"><strong id="capacity-estimate"></strong></div>
+        <details class="disclosure" id="recording-details">
+          <summary>撮影のヒント・録画情報</summary>
+          <div class="disclosure-body">
+            <p class="camera-status" id="camera-status" role="status"></p>
+            <p class="orientation-status" id="orientation-status" role="status"></p>
+            <p class="capture-fps" id="capture-fps" role="status"></p>
+            <p class="orientation-help">横向きは画面回転ロックを解除してから開始。録画中に向きを変えると、保存して終了します。</p>
+            <p id="capacity-detail"></p>
+            <p>保存済み動画と書き出しには、別途空き容量が必要です。</p>
+            <p id="storage-display">保存領域 —</p>
+          </div>
+        </details>
       </section>
 
       <section class="library-panel" aria-labelledby="library-heading">
@@ -66,23 +78,29 @@
         <div class="library-items" id="library-items"><div class="empty-library">保存した動画はここに表示されます。</div></div>
       </section>
 
-      <p class="help-text" id="mode-explanation">MP4対応ブラウザーでは録画を継続したまま直前の指定時間を保持し、1本の動画として出力します。</p>
-      <p class="notice">録画中は画面を表示したままにしてください。画面ロック・アプリ切替で録画が止まることがあります。大切な動画は「ファイル」に書き出してください。</p>
+
     </main>
-    <footer>REPLAYCAM <span id="version">v0.4.1 試用版</span> · 動画は外部サーバーに送信されません</footer>
+    <footer>REPLAYCAM <span id="version">v0.4.2 試用版</span> · 動画は端末内に保存</footer>
   </div>
 
 
   <dialog id="clip-dialog" class="clip-dialog">
     <div class="dialog-header"><div><div class="overline">SAVED VIDEO</div><h3 id="clip-title">録画</h3></div><button type="button" id="dialog-close" class="icon-button" aria-label="閉じる">✕</button></div>
     <p id="clip-description" class="dialog-description"></p>
-    <div class="dialog-actions"><button id="export-all" class="button primary" type="button">動画をダウンロード</button><button id="export-zip" class="button secondary" type="button">ZIPで保存</button><button id="delete-clip" class="button danger" type="button">削除</button></div>
-    <div id="segment-list" class="segment-list"></div>
+    <div class="dialog-actions"><button id="export-all" class="button primary" type="button">1本の動画にする</button></div>
     <video id="clip-playback" controls playsinline preload="metadata" class="clip-playback" hidden></video>
     <div class="progress" id="export-progress" hidden></div>
     <button id="share-video" class="button primary" type="button" hidden>写真に保存・共有</button>
-    <p id="share-help" class="dialog-description" hidden>共有画面に「ビデオを保存」が表示される場合は、それを選ぶと写真アプリに保存できます。表示されない場合は動画をダウンロードして「ファイル」に保存してください。</p>
+    <p id="share-help" class="dialog-description" hidden>共有画面の「ビデオを保存」で写真に保存できます。</p>
     <a id="download-result" class="download-result" hidden>ダウンロードが始まらない場合はここをタップ</a>
+    <details class="disclosure" id="export-details">
+      <summary>元データ・復旧用ZIP</summary>
+      <div class="disclosure-body">
+        <div id="segment-list" class="segment-list"></div>
+        <button id="export-zip" class="button secondary" type="button">元データをZIPで保存</button>
+      </div>
+    </details>
+    <button id="delete-clip" class="delete-button" type="button">この録画を削除</button>
   </dialog>
   <script type="module" src="./app.js"></script>
 </body>

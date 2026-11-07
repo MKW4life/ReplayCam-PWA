@@ -39,6 +39,7 @@ test('WebKit persists replay fragments across reload and exports every audio/vid
   const download=await downloadEvent;
   const input=new Input({source:new BlobSource(new Blob([await readFile(await download.path())])),formats:[MP4]});
   try{let frames=0;for await(const packet of new EncodedPacketSink(await input.getPrimaryVideoTrack()).packets())frames++;expect(frames).toBe(60);}finally{input.dispose();}
+  await page.locator('#export-details summary').click();
   const zipEvent=page.waitForEvent('download');await page.locator('#export-zip').click();
   const zip=await readFile(await(await zipEvent).path());
   expect(zip.readUInt32LE(0)).toBe(0x04034b50);expect(zip.readUInt32LE(zip.length-22)).toBe(0x06054b50);

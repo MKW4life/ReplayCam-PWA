@@ -88,10 +88,11 @@ function updateControls(){
   ui.start.querySelector('span:last-child').textContent=starting?'カメラ起動中…':'録画開始';
   ui.state.textContent=starting?'接続中':stopping?'終了処理中':running?(isReplay?(continuousReplay?'連続BUFFER':'BUFFER'):'REC'):'待機';
   ui.indicator.classList.toggle('active',running);
-  ui.settingsNote.textContent=busy?'録画中は変更できません':'録画開始前に変更できます';
+  ui.settingsNote.textContent=busy?'録画中は変更できません':'録画前に設定';
+  document.getElementById('quality-note').hidden=settings.resolution<1440;
   ui.modeExplanation.textContent=isReplay
-    ?'録画を継続したまま端末内の古い区間を破棄し、直前の指定時間を保持します（MP4対応ブラウザー）。保存済みから1本の動画にして保存できます。結合できない場合は理由を表示し、元の区間を残します。'
-    :'終了すると開始から終了までの動画を1ファイルとして保存します。長時間の録画では端末の空き容量に注意してください。';
+    ?`直前${settings.duration}分を残すには「直前を保存」`
+    :'開始から停止までを1本の動画で保存';
   ui.resolution.value=String(settings.resolution);
   ui.fps.value=String(settings.fps);
   ui.duration.value=String(settings.duration);
@@ -107,7 +108,7 @@ function updateEstimate(){
   const seconds=mode==='replay'?settings.duration*60:60;
   const bytes=estimateRecordingBytes(settings,seconds,observed);
   ui.estimate.textContent=mode==='replay'?`直前${settings.duration}分の予想容量：約${formatBytes(bytes)}`:`通常録画1分あたり：約${formatBytes(bytes)}`;
-  ui.estimateDetail.textContent=(observed?'録画中の実測から推定':'設定した画質・fpsから推定（目安）')+'。映像の内容や端末で変わります。';
+  ui.estimateDetail.textContent=(observed?'容量は録画中の実測から推定。':'容量は画質・fpsからの概算。')+'映像の内容で変わります。';
 }
 function updateCameraStatus(){
   const actual=stream?.getVideoTracks()[0]?.getSettings?.()||{};
@@ -128,7 +129,7 @@ function updateCaptureBoundary(){
   const frame=stream?containedFrame(ui.viewfinder.clientWidth,ui.viewfinder.clientHeight,ui.video.videoWidth,ui.video.videoHeight):null;
   ui.frame.hidden=!frame;
   if(frame){for(const [key,value] of Object.entries(frame))ui.frame.style[key]=`${value}px`;}
-  ui.frameNote.textContent=frame?'白い枠内が保存されます（切り抜きなし）':'録画開始後、白い枠内の映像が保存されます';
+  ui.frameNote.textContent=frame?'白枠内を保存':'白枠が録画範囲です';
 }
 function updateOrientationStatus(){
   const orientation=stream?actualOrientation():(landscapeQuery.matches?'landscape':'portrait');
@@ -166,7 +167,7 @@ function setCameraFacts(){
   const width=ui.video.videoWidth||actual.width,height=ui.video.videoHeight||actual.height;
   const d=(width&&height)?`${width}×${height}`:'解像度未確認';
   const f=actual.frameRate?` · カメラ約${Math.round(actual.frameRate)}fps`:' · fps未確認';
-  ui.facts.textContent=`${cameraLabel(actual.facingMode)} · ${d}${f}${recordingStats?.frames?' · 保存平均'+recordingStats.fps.toFixed(1)+'fps':''}`;
+  ui.facts.textContent=`${d}${recordingStats?.frames?' · 保存'+recordingStats.fps.toFixed(1)+'fps':f}`;
 }
 function releaseCamera(){
   const old=stream;stream=null;
@@ -544,17 +545,19 @@ function openClip(item){
   selectedItem=item;
   revokePreview();
   ui.clipTitle.textContent=item.kind==='replay'?'リプレイ録画':'通常録画';
-  ui.clipDescription.textContent=`${item.orientation&&item.orientation!=='unknown'?orientationLabel(item.orientation)+' · ':''}${dateLabel(item.created)} · ${formatDuration(item.seconds)} · ${formatBytes(item.bytes)}${item.kind==='replay'?' · ダウンロード時に自動結合':' · 1本の動画'}`;
-  ui.exportAll.textContent=item.kind==='replay'&&(item.partIds.length>1||item.continuous)?'全区間を1本の動画にする':'動画をダウンロード';
+  ui.clipDescription.textContent=`${item.orientation&&item.orientation!=='unknown'?orientationLabel(item.orientation)+' · ':''}${dateLabel(item.created)} · ${formatDuration(item.seconds)} · ${formatBytes(item.bytes)}`;
+  ui.exportAll.textContent=item.kind==='replay'&&(item.partIds.length>1||item.continuous)?'1本の動画にする':'動画を準備';
   ui.exportZip.hidden=item.kind!=='replay';
+  const exportDetails=document.getElementById('export-details');
+  exportDetails.hidden=item.kind!=='replay';exportDetails.open=false;
   ui.exportZip.textContent=item.continuous?'元データをZIPで保存':'ZIPで保存';
   ui.exportProgress.hidden=true;
   clearDownload();
   ui.segments.replaceChildren();
   if(item.kind==='replay'&&item.continuous){
-    addText(ui.segments,'p','録画を止めずに保存した連続データです。全区間を元の時刻どおりにつなぎ、1本の動画にして保存します。開始・終了位置はキーフレームに合わせて数秒前後します。元データのZIPは復旧用で、区間を単体で再生できない場合があります。','dialog-description');
+    addText(ui.segments,'p','ZIPは復旧用です。区間単体では再生できない場合があります。動画の開始・終了は数秒前後することがあります。','dialog-description');
   }else if(item.kind==='replay'){
-    addText(ui.segments,'p','この録画の全区間を順番につなぎ、音声がある場合は音声も保った1本の動画として出力します。256MB制限はありませんが、端末の空き容量が必要です。写真への保存は結合後の共有ボタンから行います。元の区間の欠落は修復できません。','dialog-description');
+    addText(ui.segments,'p','区間ごとの再生・保存と、元データのZIP保存ができます。','dialog-description');
     item.partIds.forEach((id,index)=>{
       const row=document.createElement('div');row.className='segment';
       const info=document.createElement('div');

@@ -46,3 +46,26 @@
 .preview-bottom{flex-wrap:wrap!important}
 #toast{display:none;position:static;transform:none;width:100%;max-width:none;flex-basis:100%;margin:3px 0 0;padding:6px 8px;font-size:11px;border-radius:6px;box-shadow:none;opacity:1;transition:none;pointer-events:none}
 #toast.show{display:block;transform:none}
+
+/* Keep the capture flow concise; optional guidance stays in disclosures. */
+.mode-tabs{margin-bottom:8px}.mode-caption{margin:0 2px 14px;color:#b1b7c4;font-size:12px;line-height:1.6}
+.recording-reminder{margin:9px 3px 0;font-size:11px;line-height:1.6;color:#a9afbc}
+.settings-panel{padding:18px}.section-title{margin-bottom:16px}.field-grid{gap:15px 12px}
+.field{font-size:12px;gap:7px}.field select{height:46px;font-size:14px}.camera-field{max-width:none;margin-top:15px}
+.quality-note{display:flex;flex-direction:column;gap:4px;font-size:11px;line-height:1.65;margin:14px 0 0;padding:11px 12px;border-left:2px solid #d9ae79;background:#28241f;border-radius:0 8px 8px 0;color:#e9cfad}
+.quality-note strong{font-weight:600}.quality-note span{color:#c9b9a3}
+.storage-estimate{margin-top:16px;padding:13px 12px;background:#1e242c;border-color:#303b48}.storage-estimate strong{font-size:13px;font-weight:600}
+.disclosure{margin-top:16px;border-top:1px solid var(--line);padding-top:2px}
+.disclosure summary{cursor:pointer;min-height:44px;display:list-item;list-style-position:inside;padding:13px 2px;color:#b8bfcd;font-size:12px;font-weight:600}
+.disclosure summary:focus-visible{outline:2px solid #d88b91;outline-offset:2px;border-radius:5px}
+.disclosure-body{padding:0 2px 8px}.disclosure-body p{font-size:11px;line-height:1.8;color:var(--muted);margin:0 0 10px}
+.disclosure-body .segment-list{margin:0 0 12px;max-height:25vh}.disclosure-body .button{width:100%}
+.clip-dialog{padding:22px}.clip-dialog .dialog-description{margin:10px 0 18px}
+.dialog-actions>.button{width:100%;min-height:48px;font-size:14px}.clip-dialog .disclosure{margin-top:18px}
+.delete-button{display:block;margin:12px auto 0;padding:10px 16px;min-height:44px;background:none;border:0;color:#d3949c;font:inherit;font-size:12px}
+@media(orientation:landscape) and (max-height:520px){.mode-caption{margin-bottom:7px;font-size:11px}.recording-reminder{font-size:10px;margin-top:6px}}
+
+@media(orientation:landscape) and (max-height:520px){
+  .camera-card{max-height:calc(100svh - 116px)}
+  .camera-preview{height:calc(100svh - 120px)}
+}

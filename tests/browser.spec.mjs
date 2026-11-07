@@ -36,7 +36,9 @@ test('real browser recording exports a merged file with audio, explicit ZIP and 
   await page.locator('#stop-button').click();
   await expect(page.locator('#start-button')).toBeEnabled();
   await page.locator('.open-clip').first().click();
-  await expect(page.locator('#export-all')).toHaveText('全区間を1本の動画にする');
+  await expect(page.locator('#export-all')).toHaveText('1本の動画にする');
+  await expect(page.locator('#export-zip')).toBeHidden();
+  await page.screenshot({path:test.info().outputPath('compact-export.png')});
   await page.evaluate(()=>navigator.serviceWorker.ready);
   await page.evaluate(()=>caches.open('unrelated-project-cache'));
   await context.setOffline(true);
@@ -55,11 +57,12 @@ test('real browser recording exports a merged file with audio, explicit ZIP and 
     expect(count).toBeGreaterThan(20);
   }finally{input.dispose();}
   const zipEvent=page.waitForEvent('download');
+  await page.locator('#export-details summary').click();
   await page.locator('#export-zip').click();
   expect((await zipEvent).suggestedFilename()).toMatch(/\.zip$/);
   await page.locator('#dialog-close').click();
   await page.reload();
-  await expect(page.locator('#version')).toContainText('v0.4.1');
+  await expect(page.locator('#version')).toContainText('v0.4.2');
   expect(await page.evaluate(()=>caches.has('unrelated-project-cache'))).toBe(true);
   expect(errors).toEqual([]);
 });
@@ -162,6 +165,7 @@ test('unreadable saved segments show an error without automatically exporting ZI
   await expect(page.locator('#export-progress')).toContainText('1本の動画を出力できませんでした');
   expect(downloads).toHaveLength(0);
   const event=page.waitForEvent('download');
+  await page.locator('#export-details summary').click();
   await page.locator('#export-zip').click();
   expect((await event).suggestedFilename()).toBe('Broken.zip');
   await page.locator('#dialog-close').click();
@@ -319,4 +323,25 @@ test('legacy Blob recordings remain exportable without changing their stored rec
   if(await page.locator('#share-video').isVisible())await page.locator('#download-result').click();
   const input=new Input({source:new BlobSource(new Blob([await readFile(await(await event).path())])),formats:[MP4]});
   try{let frames=0;for await(const packet of new EncodedPacketSink(await input.getPrimaryVideoTrack()).packets())frames++;expect(frames).toBe(6);}finally{input.dispose();}
+});
+
+
+test('settings keep the high-resolution fps notice visible and hide optional explanations',async({page})=>{
+  await page.goto('/');
+  await expect(page.locator('#recording-details')).not.toHaveAttribute('open','');
+  await expect(page.locator('#quality-note')).toBeHidden();
+  await page.locator('#resolution').selectOption('1440');
+  await expect(page.locator('#quality-note')).toBeVisible();
+  await expect(page.locator('#quality-note')).toContainText('30fps');
+  await expect(page.locator('#quality-note')).toContainText('1080p以下');
+  await expect(page.locator('#quality-note')).not.toContainText('iPhone');
+  await expect(page.locator('#capture-fps')).toBeHidden();
+  await page.screenshot({path:test.info().outputPath('compact-settings.png'),fullPage:true});
+  await page.locator('#recording-details summary').click();
+  await expect(page.locator('#capture-fps')).toBeVisible();
+  await page.locator('#resolution').selectOption('2160');
+  await expect(page.locator('#quality-note')).toBeVisible();
+  await page.locator('#resolution').selectOption('1080');
+  await expect(page.locator('#quality-note')).toBeHidden();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
