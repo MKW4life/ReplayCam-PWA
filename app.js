@@ -1,10 +1,11 @@
-import {SEGMENT_LENGTH_MS, safeSettings, formatDuration, formatBytes, chooseMimeType, extensionFor, selectReplayParts, fileStamp, resolutionDimensions, targetVideoBitrate, estimateRecordingBytes, cameraLabel} from './lib.js';
+import {SEGMENT_LENGTH_MS, safeSettings, formatDuration, formatBytes, chooseMimeType, extensionFor, selectReplayParts, fileStamp, resolutionDimensions, targetVideoBitrate, estimateRecordingBytes, cameraLabel, captureOrientation, orientationLabel} from './lib.js';
 import {openDB, addPart, getPart, deletePart, putSaved, deleteSaved, listSaved, reclaimParts} from './storage.js';
 import {createZip} from './zip.js';
 import {mergeReplayLocally} from './merge-client.js';
 
 const el=id=>document.getElementById(id);
 const ui={
+  viewfinder:el('viewfinder'),orientationStatus:el('orientation-status'),
   video:el('camera'),empty:el('empty-camera'),start:el('start-button'),save:el('save-button'),stop:el('stop-button'),
   modeReplay:el('mode-replay'),modeStandard:el('mode-standard'),duration:el('duration'),resolution:el('resolution'),
   fps:el('fps'),audio:el('audio'),facing:el('facing'),cameraStatus:el('camera-status'),estimate:el('capacity-estimate'),estimateDetail:el('capacity-detail'),elapsed:el('elapsed'),counter:el('buffer-counter'),
@@ -37,6 +38,9 @@ let exporting=false;
 let measuredBytes=0;
 let measuredSeconds=0;
 let wasHiddenDuringRecording=false;
+let recordingOrientation='unknown';
+let rotationStopped=false;
+const landscapeQuery=window.matchMedia('(orientation: landscape)');
 
 function readSettings(){try{return JSON.parse(localStorage.getItem('replaycam-settings')||'{}');}catch{return {};}}
 function storeSettings(){try{localStorage.setItem('replaycam-settings',JSON.stringify(settings));}catch{/* Storage may be disabled. */}}
@@ -82,6 +86,7 @@ function updateControls(){
   ui.facing.value=settings.facing;
   updateEstimate();
   updateCameraStatus();
+  updateOrientationStatus();
 }
 function updateEstimate(){
   const observed=running&&measuredSeconds>0?{bytes:measuredBytes,seconds:measuredSeconds}:null;
@@ -94,12 +99,43 @@ function updateCameraStatus(){
   const actual=stream?.getVideoTracks()[0]?.getSettings?.()||{};
   ui.cameraStatus.textContent=stream?`使用中：${cameraLabel(actual.facingMode)} · 希望：${cameraLabel(settings.facing)}`:`選択中：${cameraLabel(settings.facing)}`;
 }
+function actualOrientation(){
+  const actual=stream?.getVideoTracks()[0]?.getSettings?.()||{};
+  return captureOrientation(ui.video.videoWidth||actual.width,ui.video.videoHeight||actual.height);
+}
+function updateOrientationStatus(){
+  const orientation=stream?actualOrientation():(landscapeQuery.matches?'landscape':'portrait');
+  ui.orientationStatus.textContent=stream
+    ?`${orientationLabel(orientation)}${running?'で録画中':'のカメラ映像'}`
+    :`端末：${orientationLabel(orientation)} · 録画開始前に向きを合わせてください`;
+  const actual=stream?.getVideoTracks()[0]?.getSettings?.()||{};
+  const width=ui.video.videoWidth||actual.width,height=ui.video.videoHeight||actual.height;
+  if(width>0&&height>0)ui.viewfinder.style.setProperty('--camera-ratio',`${width} / ${height}`);
+  else ui.viewfinder.style.removeProperty('--camera-ratio');
+}
+function handleDeviceRotation(){
+  updateOrientationStatus();
+  if(!running||stopping)return;
+  rotationStopped=true;
+  // Replay normally discards the unsaved buffer when stopped. Snapshot it
+  // before stopping so rotating the phone cannot discard the current take.
+  if(mode==='replay')saveReplay();
+  stopRecording();
+  toast('端末の向きが変わったため録画を終了します。保存済みを確認してから再開してください。',8000);
+}
+function handleVideoResize(){
+  setCameraFacts();
+  const current=actualOrientation();
+  if(running&&recordingOrientation!=='unknown'&&current!=='unknown'&&current!==recordingOrientation)handleDeviceRotation();
+}
 function setCameraFacts(){
   updateCameraStatus();
+  updateOrientationStatus();
   const track=stream?.getVideoTracks()[0];
   const actual=track?.getSettings?.()||{};
   if (!stream){ui.facts.textContent='—';return;}
-  const d=(actual.width&&actual.height)?`${actual.width}×${actual.height}`:'解像度未確認';
+  const width=ui.video.videoWidth||actual.width,height=ui.video.videoHeight||actual.height;
+  const d=(width&&height)?`${width}×${height}`:'解像度未確認';
   const f=actual.frameRate?` · ${Math.round(actual.frameRate)}fps`:' · fps未確認';
   ui.facts.textContent=`${cameraLabel(actual.facingMode)} · ${d}${f}`;
 }
@@ -246,11 +282,11 @@ async function saveReplaySnapshot(){
     id:crypto.randomUUID?.()||`${Date.now()}-${Math.random()}`,
     name:`Replay_${fileStamp(now)}`,kind:'replay',created:now.getTime(),
     partIds:parts.map(p=>p.id),seconds:parts.reduce((sum,p)=>sum+(p.ended-p.started)/1000,0),
-    bytes:parts.reduce((sum,p)=>sum+p.bytes,0),mime:parts[0].mime
+    bytes:parts.reduce((sum,p)=>sum+p.bytes,0),mime:parts[0].mime,orientation:recordingOrientation
   };
   await putSaved(item);
   await refreshLibrary();
-  toast(`リプレイを保存しました（${formatDuration(item.seconds)}・${parts.length}区間）`);
+  toast(`${rotationStopped?'端末の向きが変わったため録画を終了しました。':''}リプレイを保存しました（${formatDuration(item.seconds)}・${parts.length}区間）`);
 }
 function runStandard(){
   let instance;
@@ -282,9 +318,9 @@ function runStandard(){
         const now=new Date();
         const item={id:crypto.randomUUID?.()||`${Date.now()}-${Math.random()}`,name:`Recording_${fileStamp(now)}`,
           kind:'standard',created:now.getTime(),partIds,seconds:(Date.now()-startedAt)/1000,
-          bytes:size,mime};
+          bytes:size,mime,orientation:recordingOrientation};
         await putSaved(item);
-        toast(`録画を保存しました（${formatDuration(item.seconds)}）`);
+        toast(`${rotationStopped?'端末の向きが変わったため録画を終了しました。':''}録画を保存しました（${formatDuration(item.seconds)}）`);
         await refreshLibrary();
       }else toast('録画データがありませんでした');
     }catch(error){toast(`保存に失敗しました: ${error.message}`,7000);}
@@ -303,6 +339,7 @@ function runStandard(){
 }
 async function startRecording(){
   if(running||starting||stopping)return;
+  rotationStopped=false;
   starting=true;updateControls();
   try{
     await openDB();
@@ -310,6 +347,7 @@ async function startRecording(){
     navigator.storage?.persist?.().catch(()=>{});
     liveParts=[];measuredBytes=0;measuredSeconds=0;
     startedAt=Date.now();
+    recordingOrientation=actualOrientation();
     running=true;starting=false;
     updateControls();
     if(mode==='replay')void runReplay();
@@ -360,7 +398,7 @@ async function refreshLibrary(){
       const row=document.createElement('div');row.className='clip-row';
       const info=document.createElement('div');info.className='clip-info';
       addText(info,'b',item.kind==='replay'?'リプレイ':'通常録画');
-      addText(info,'small',`${dateLabel(item.created)} · ${formatDuration(item.seconds)} · ${formatBytes(item.bytes)}`);
+      addText(info,'small',`${dateLabel(item.created)} · ${formatDuration(item.seconds)} · ${formatBytes(item.bytes)}${item.orientation&&item.orientation!=='unknown'?' · '+orientationLabel(item.orientation):''}`);
       row.appendChild(info);
       const btn=addText(row,'button','開く','open-clip');btn.type='button';
       btn.addEventListener('click',()=>openClip(item));
@@ -399,7 +437,7 @@ function openClip(item){
   selectedItem=item;
   revokePreview();
   ui.clipTitle.textContent=item.kind==='replay'?'リプレイ録画':'通常録画';
-  ui.clipDescription.textContent=`${dateLabel(item.created)} · ${formatDuration(item.seconds)} · ${formatBytes(item.bytes)}${item.kind==='replay'?' · ダウンロード時に自動結合':' · 1本の動画'}`;
+  ui.clipDescription.textContent=`${item.orientation&&item.orientation!=='unknown'?orientationLabel(item.orientation)+' · ':''}${dateLabel(item.created)} · ${formatDuration(item.seconds)} · ${formatBytes(item.bytes)}${item.kind==='replay'?' · ダウンロード時に自動結合':' · 1本の動画'}`;
   ui.exportAll.textContent=item.kind==='replay'&&item.partIds.length>1?'結合して動画をDL':'動画をダウンロード';
   ui.exportZip.hidden=item.kind!=='replay';
   ui.exportProgress.hidden=true;
@@ -512,6 +550,11 @@ function updateConnection(){
   ui.connectionLabel.textContent=offline?'オフライン':'ローカル保存';
 }
 function bindEvents(){
+  ui.video.addEventListener('loadedmetadata',handleVideoResize);
+  ui.video.addEventListener('resize',handleVideoResize);
+  landscapeQuery.addEventListener('change',handleDeviceRotation);
+  if(screen.orientation?.addEventListener)screen.orientation.addEventListener('change',handleDeviceRotation);
+  else window.addEventListener('orientationchange',handleDeviceRotation);
   ui.start.addEventListener('click',startRecording);
   ui.save.addEventListener('click',saveReplay);
   ui.stop.addEventListener('click',stopRecording);

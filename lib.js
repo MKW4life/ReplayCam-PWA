@@ -61,3 +61,10 @@ export function estimateRecordingBytes(settings,seconds,observed) {
 export function cameraLabel(facing) {
   return facing==='environment'?'外カメラ（背面）':facing==='user'?'内カメラ（前面）':'カメラ種別未確認';
 }
+export function captureOrientation(width,height) {
+  if(!Number.isFinite(width)||!Number.isFinite(height)||width<=0||height<=0)return 'unknown';
+  return width>height?'landscape':height>width?'portrait':'square';
+}
+export function orientationLabel(orientation) {
+  return orientation==='landscape'?'横向き':orientation==='portrait'?'縦向き':orientation==='square'?'正方形':'向き未確認';
+}

@@ -57,9 +57,80 @@ test('real browser recording exports a merged file with audio, explicit ZIP and 
   expect((await zipEvent).suggestedFilename()).toMatch(/\.zip$/);
   await page.locator('#dialog-close').click();
   await page.reload();
-  await expect(page.locator('#version')).toContainText('v0.2.0');
+  await expect(page.locator('#version')).toContainText('v0.2.1');
   expect(await page.evaluate(()=>caches.has('unrelated-project-cache'))).toBe(true);
   expect(errors).toEqual([]);
+});
+
+test('landscape recording downloads landscape video and keeps the controls visible',async({page})=>{
+  await page.setViewportSize({width:844,height:390});
+  await page.goto('/');
+  await expect(page.locator('#orientation-status')).toContainText('横向き');
+  await page.locator('#mode-standard').click();
+  await page.locator('#resolution').selectOption('720');
+  await page.locator('#fps').selectOption('30');
+  await page.locator('#start-button').click();
+  await expect(page.locator('#stop-button')).toBeEnabled();
+  await expect(page.locator('#orientation-status')).toContainText('横向きで録画中');
+  const bounds=await page.locator('#stop-button').boundingBox();
+  expect(bounds.y).toBeGreaterThanOrEqual(0);
+  expect(bounds.y+bounds.height).toBeLessThanOrEqual(390);
+  const view=await page.locator('#camera').evaluate(video=>({width:video.videoWidth,height:video.videoHeight,fit:getComputedStyle(video).objectFit}));
+  expect(view.width).toBeGreaterThan(view.height);
+  expect(view.fit).toBe('contain');
+  await page.screenshot({path:test.info().outputPath('landscape.png')});
+  await page.waitForTimeout(1300);
+  await page.locator('#stop-button').click();
+  await expect(page.locator('#start-button')).toBeEnabled();
+  await expect(page.locator('.clip-row')).toContainText('横向き');
+  await page.locator('.open-clip').click();
+  const event=page.waitForEvent('download');
+  await page.locator('#export-all').click();
+  const download=await event;
+  const input=new Input({source:new BlobSource(new Blob([await readFile(await download.path())])),formats:[MP4,WEBM]});
+  try{
+    const video=await input.getPrimaryVideoTrack();
+    expect(video).toBeTruthy();
+    expect(await video.getDisplayWidth()).toBeGreaterThan(await video.getDisplayHeight());
+    expect(await input.getPrimaryAudioTrack()).toBeTruthy();
+    expect(await input.computeDuration()).toBeGreaterThan(0.5);
+  }finally{input.dispose();}
+});
+
+test('turning the device during replay saves the current buffer and ends recording',async({page})=>{
+  await page.setViewportSize({width:844,height:390});
+  await page.goto('/');
+  await page.locator('#resolution').selectOption('720');
+  await page.locator('#fps').selectOption('30');
+  await page.locator('#start-button').click();
+  await expect(page.locator('#stop-button')).toBeEnabled();
+  await page.waitForTimeout(1200);
+  // Viewport orientation changes exercise the same matchMedia event used by
+  // mobile browsers when the page rotates. No physical camera is accessed.
+  await page.setViewportSize({width:390,height:844});
+  await expect(page.locator('#start-button')).toBeEnabled();
+  await expect(page.locator('.clip-row')).toHaveCount(1);
+  await expect(page.locator('#toast')).toContainText('向きが変わった');
+});
+
+test('turning the device during standard recording saves a playable video',async({page})=>{
+  await page.setViewportSize({width:844,height:390});
+  await page.goto('/');
+  await page.locator('#mode-standard').click();
+  await page.locator('#resolution').selectOption('720');
+  await page.locator('#fps').selectOption('30');
+  await page.locator('#start-button').click();
+  await expect(page.locator('#stop-button')).toBeEnabled();
+  await page.waitForTimeout(1200);
+  await page.setViewportSize({width:390,height:844});
+  await expect(page.locator('#start-button')).toBeEnabled();
+  await expect(page.locator('.clip-row')).toHaveCount(1);
+  await page.locator('.open-clip').click();
+  const event=page.waitForEvent('download');
+  await page.locator('#export-all').click();
+  const input=new Input({source:new BlobSource(new Blob([await readFile(await (await event).path())])),formats:[MP4,WEBM]});
+  try{expect(await input.computeDuration()).toBeGreaterThan(0.5);expect(await input.getPrimaryVideoTrack()).toBeTruthy();}
+  finally{input.dispose();}
 });
 
 test('unreadable saved segments automatically download ZIP and remain saved',async({page})=>{
